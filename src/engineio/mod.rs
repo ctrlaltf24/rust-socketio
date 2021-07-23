@@ -1,4 +1,5 @@
 pub mod packet;
 pub mod socket;
-pub mod transport_emitter;
 pub mod transports;
+pub mod transport;
+pub mod event;

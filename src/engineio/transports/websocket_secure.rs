@@ -1,5 +1,5 @@
 use crate::engineio::packet::{Packet, PacketId};
-use crate::engineio::transports::Transport;
+use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use native_tls::TlsConnector;
@@ -14,7 +14,7 @@ use websocket::{
     ClientBuilder as WsClientBuilder, Message,
 };
 
-pub(super) struct WebsocketSecureTransport {
+pub(crate) struct WebsocketSecureTransport {
     client: Arc<Mutex<WsClient<TlsStream<TcpStream>>>>,
 }
 
@@ -92,5 +92,9 @@ impl Transport for WebsocketSecureTransport {
             }
             _ => Ok(Bytes::from(received_df.take_payload())),
         }
+    }
+
+    fn name(&self) -> &str {
+        "websocket"
     }
 }

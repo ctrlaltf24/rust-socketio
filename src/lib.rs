@@ -99,6 +99,8 @@ pub mod socketio;
 /// Contains Client trait
 pub mod client;
 
+pub mod event;
+
 /// Contains the error type which will be returned with every result in this
 /// crate. Handles all kinds of errors.
 pub mod error;
@@ -125,6 +127,7 @@ mod test {
     use serde_json::json;
     use std::time::Duration;
     const SERVER_URL: &str = "http://localhost:4200";
+    use crate::event::EventEmitter;
 
     #[test]
     fn it_works() {

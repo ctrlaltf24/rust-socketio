@@ -1,31 +1,42 @@
 use crate::client::Client;
 use crate::engineio::packet::{decode_payload, encode_payload, HandshakePacket, Packet, PacketId};
-use crate::engineio::transport_emitter::{EventEmitter, TransportEmitter};
-use crate::engineio::transports::Transport;
+pub use crate::event::{EventEmitter};
+use crate::engineio::transports::{polling::PollingTransport, websocket_secure::WebsocketSecureTransport, websocket::WebsocketTransport};
+use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
+use super::event::Event;
 use adler32::adler32;
 use bytes::Bytes;
 use native_tls::TlsConnector;
 use reqwest::{header::HeaderMap, Url};
 use std::convert::TryInto;
 use std::time::SystemTime;
-use std::{fmt::Debug, sync::atomic::Ordering};
+use std::{sync::atomic::Ordering};
 use std::{
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
+use std::{collections::HashMap};
+use ::websocket::header::Headers;
+
+/// Type of a `Callback` function. (Normal closures can be passed in here).
+type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
 
 /// An `engine.io` socket which manages a connection with the server and allows
 /// it to register common callbacks.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EngineIOSocket {
-    pub(super) transport: Arc<RwLock<TransportEmitter>>,
+    pub(super) transport: Arc<RwLock<Box<dyn Transport + Sync + Send>>>,
     pub connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
     last_pong: Arc<Mutex<Instant>>,
     host_address: Arc<Mutex<Option<String>>>,
     connection_data: Arc<RwLock<Option<HandshakePacket>>>,
     root_path: Arc<RwLock<String>>,
+    callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
+    // immutable
+    opening_headers: Arc<Option<HeaderMap>>,
+    tls_config: Arc<Option<TlsConnector>>,
 }
 
 impl EngineIOSocket {
@@ -35,11 +46,17 @@ impl EngineIOSocket {
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
+        let callbacks = HashMap::new();
+        callbacks.insert(Event::Close, Vec::new());
+        callbacks.insert(Event::Data, Vec::new());
+        callbacks.insert(Event::Error, Vec::new());
+        callbacks.insert(Event::Open, Vec::new());
+        callbacks.insert(Event::Packet, Vec::new());
         EngineIOSocket {
-            transport: Arc::new(RwLock::new(TransportEmitter::new(
+            transport: Arc::new(RwLock::new(Box::new(PollingTransport::new(
                 tls_config,
                 opening_headers,
-            ))),
+            )))),
             connected: Arc::new(AtomicBool::default()),
             last_ping: Arc::new(Mutex::new(Instant::now())),
             last_pong: Arc::new(Mutex::new(Instant::now())),
@@ -48,6 +65,9 @@ impl EngineIOSocket {
             root_path: Arc::new(RwLock::new(
                 root_path.unwrap_or_else(|| "engine.io".to_owned()),
             )),
+            callbacks: Arc::new(RwLock::new(callbacks)),
+            opening_headers: Arc::new(opening_headers),
+            tls_config: Arc::new(tls_config),
         }
     }
 
@@ -84,14 +104,10 @@ impl EngineIOSocket {
 
             match full_address.scheme() {
                 "https" => {
-                    self.transport
-                        .write()?
-                        .upgrade_websocket_secure(full_address.to_string())?;
+                    *self.transport.write()? = Box::new(WebsocketSecureTransport::new(full_address.to_string(), *self.tls_config.as_ref(), self.get_ws_headers()));
                 }
                 "http" => {
-                    self.transport
-                        .write()?
-                        .upgrade_websocket(full_address.to_string())?;
+                    *self.transport.write()? = Box::new(WebsocketTransport::new(full_address.to_string(), self.get_ws_headers()));
                 }
                 _ => return Err(Error::InvalidUrl(full_address.to_string())),
             }
@@ -106,7 +122,7 @@ impl EngineIOSocket {
     pub fn emit(&self, packet: Packet, is_binary_att: bool) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::ActionBeforeOpen;
-            self.call_error_callback(format!("{}", error))?;
+            self.callback(Event::Error,format!("{}", error))?;
             return Err(error);
         }
         // build the target address
@@ -129,7 +145,7 @@ impl EngineIOSocket {
             .read()?
             .emit(address.to_string(), data, is_binary_att)
         {
-            self.call_error_callback(error.to_string())?;
+            self.callback(Event::Error,error.to_string())?;
             return Err(error);
         }
 
@@ -156,7 +172,7 @@ impl EngineIOSocket {
         let mut path = format!(
             "/{}/?EIO=4&transport={}&t={}",
             self.root_path.read()?,
-            self.transport.read()?.get_transport_name()?,
+            self.transport.read()?.name(),
             self.get_hashed_time(),
         );
 
@@ -175,14 +191,12 @@ impl EngineIOSocket {
 
     /// Calls the error callback with a given message.
     #[inline]
-    fn call_error_callback(&self, text: String) -> Result<()> {
+    fn callback<T: Into<Bytes>>(&self, event: Event, payload: T) -> Result<()> {
         let transport = self.transport.read()?;
-        let function = transport.on_error.read()?;
-        if let Some(function) = function.as_ref() {
-            spawn_scoped!(function(text));
+        let functions = self.callbacks.read()?.get(&event).unwrap();
+        for function in functions {
+            spawn_scoped!(function(payload.into()));
         }
-        drop(function);
-
         Ok(())
     }
 
@@ -209,42 +223,56 @@ impl EngineIOSocket {
             Err(Error::SocketClosed())
         }
     }
+
+    fn get_ws_headers(&self) -> Headers {
+        let mut headers = Headers::new();
+        // SAFETY: unwrapping is safe as we only hand out `Weak` copies after the connection procedure
+        if self.opening_headers.is_some() {
+            for (key, val) in self.opening_headers.unwrap() {
+                headers.append_raw(key.unwrap().to_string(), val.as_bytes().to_owned());
+            }
+        }
+        headers
+    }
+    pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()> where T: Fn(Bytes) + 'static + Sync + Send {
+        // For some reason it doesn't resolve types correctly in a generic trait.
+        Arc::get_mut(&mut self.callbacks)
+            .unwrap()
+            .write()?
+            .get(&event).unwrap()
+            .push(Box::new(callback));
+        Ok(())
+    }
 }
 
-impl EventEmitter for EngineIOSocket {
-    fn set_on_open<F>(&mut self, function: F) -> Result<()>
-    where
-        F: Fn(()) + 'static + Sync + Send,
-    {
-        self.transport.write()?.set_on_open(function)
+impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
+    fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T, callback: Option<Callback>) -> Result<()> {
+        self.emit(Packet::new(event, bytes.into()), false)
     }
 
-    fn set_on_error<F>(&mut self, function: F) -> Result<()>
-    where
-        F: Fn(String) + 'static + Sync + Send,
-    {
-        self.transport.write()?.set_on_error(function)
+    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
+        Arc::get_mut(&mut self.callbacks)
+            .unwrap()
+            .write()?
+            .get(&event).unwrap()
+            .push(callback);
+        Ok(())
     }
 
-    fn set_on_packet<F>(&mut self, function: F) -> Result<()>
-    where
-        F: Fn(Packet) + 'static + Sync + Send,
-    {
-        self.transport.write()?.set_on_packet(function)
-    }
+    fn off(&mut self, event: Event, callback: Option<Callback>) -> Result<()> {
+        let map = Arc::get_mut(&mut self.callbacks)
+            .unwrap()
+            .write()?;
+        match callback {
 
-    fn set_on_data<F>(&mut self, function: F) -> Result<()>
-    where
-        F: Fn(Bytes) + 'static + Sync + Send,
-    {
-        self.transport.write()?.set_on_data(function)
-    }
-
-    fn set_on_close<F>(&mut self, function: F) -> Result<()>
-    where
-        F: Fn(()) + 'static + Sync + Send,
-    {
-        self.transport.write()?.set_on_close(function)
+            Some(callback) => {
+                map.get(&event).unwrap().retain(|x| Box::into_raw(*x) != Box::into_raw(callback));
+            },
+            None => {
+                map.insert(event,Vec::new()).unwrap();
+            }
+        }
+        Ok(())
     }
 }
 
@@ -295,14 +323,7 @@ impl Client for EngineIOSocket {
                 *connection_data = Some(conn_data);
                 drop(connection_data);
 
-                // call the on_open callback
-                let transport = self.transport.read()?;
-                let function = transport.on_open.read()?;
-                if let Some(function) = function.as_ref() {
-                    spawn_scoped!(function(()));
-                }
-                drop(function);
-                drop(transport);
+                self.callback(Event::Open, "");
 
                 // set the last ping to now and set the connected state
                 *self.last_ping.lock()? = Instant::now();
@@ -316,12 +337,12 @@ impl Client for EngineIOSocket {
             } else {
                 let error =
                     Error::HandshakeError(std::str::from_utf8(response[..].as_ref())?.to_owned());
-                self.call_error_callback(format!("{}", error))?;
+                self.callback(Event::Error,format!("{}", error))?;
                 Err(error)
             }
         } else {
             let error = Error::InvalidUrl(address.into());
-            self.call_error_callback(format!("{}", error))?;
+            self.callback(Event::Error,format!("{}", error))?;
             Err(error)
         }
     }
@@ -347,7 +368,7 @@ impl EngineClient for EngineIOSocket {
     fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::ActionBeforeOpen;
-            self.call_error_callback(format!("{}", error))?;
+            self.callback(Event::Error,format!("{}", error))?;
             return Err(error);
         }
 
@@ -373,33 +394,16 @@ impl EngineClient for EngineIOSocket {
             }
 
             for packet in packets.unwrap() {
-                {
-                    let transport = self.transport.read()?;
-                    let on_packet = transport.on_packet.read()?;
-                    // call the packet callback
-                    if let Some(function) = on_packet.as_ref() {
-                        spawn_scoped!(function(packet.clone()));
-                    }
-                }
+                self.callback(Event::Packet, packet.clone().encode());
 
                 // check for the appropriate action or callback
                 match packet.packet_id {
                     PacketId::Message => {
-                        let transport = self.transport.read()?;
-                        let on_data = transport.on_data.read()?;
-                        if let Some(function) = on_data.as_ref() {
-                            spawn_scoped!(function(packet.data));
-                        }
-                        drop(on_data);
+                        self.callback(Event::Data, packet.clone().encode());
                     }
 
                     PacketId::Close => {
-                        let transport = self.transport.read()?;
-                        let on_close = transport.on_close.read()?;
-                        if let Some(function) = on_close.as_ref() {
-                            spawn_scoped!(function(()));
-                        }
-                        drop(on_close);
+                        self.callback(Event::Close, packet.clone().encode());
                         // set current state to not connected and stop polling
                         self.connected.store(false, Ordering::Release);
                     }
@@ -520,12 +524,12 @@ mod test {
             .is_ok());
 
         socket
-            .set_on_data(|data| {
+            .on(Event::Data, Box::new(|data: Bytes| {
                 println!(
                     "Received: {:?}",
                     std::str::from_utf8(&data).expect("Error while decoding utf-8")
                 );
-            })
+            }))
             .unwrap();
 
         assert!(socket
@@ -607,19 +611,19 @@ mod test {
         let mut socket = EngineIOSocket::new(None, None, None);
 
         assert!(socket
-            .set_on_open(|_| {
+            .on(Event::Open, |_| {
                 println!("Open event!");
             })
             .is_ok());
 
         assert!(socket
-            .set_on_packet(|packet| {
+            .on(Event::Packet, |packet| {
                 println!("Received packet: {:?}", packet);
             })
             .is_ok());
 
         assert!(socket
-            .set_on_data(|data| {
+            .on(Event::Data, |data| {
                 println!("Received packet: {:?}", std::str::from_utf8(&data));
             })
             .is_ok());

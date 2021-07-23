@@ -1,5 +1,7 @@
+use crate::engineio::event::Event as EngineEvent;
+
 /// An `Event` in `socket.io` could either (`Message`, `Error`) or custom.
-#[derive(Debug, PartialEq, PartialOrd)]
+#[derive(Debug, PartialEq, PartialOrd, Eq, Hash)]
 pub enum Event {
     Message,
     Error,

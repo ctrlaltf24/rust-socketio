@@ -1,5 +1,5 @@
 use crate::engineio::packet::{Packet, PacketId};
-use crate::engineio::transports::Transport;
+use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
@@ -9,7 +9,7 @@ use websocket::{
     ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
 };
 
-pub(super) struct WebsocketTransport {
+pub(crate) struct WebsocketTransport {
     sender: Arc<Mutex<Writer<TcpStream>>>,
     receiver: Arc<Mutex<Reader<TcpStream>>>,
 }
@@ -92,5 +92,9 @@ impl Transport for WebsocketTransport {
             }
             _ => Ok(Bytes::from(received_df.take_payload())),
         }
+    }
+
+    fn name(&self) -> &str {
+        "websocket"
     }
 }

@@ -3,6 +3,7 @@ use crate::client::Client;
 use crate::error::{Error, Result};
 use native_tls::TlsConnector;
 use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};
+pub use crate::event::EventEmitter;
 
 type SocketCallback = dyn FnMut(Payload, Socket) + 'static + Sync + Send;
 
@@ -187,7 +188,7 @@ impl SocketBuilder {
         let mut socket = Socket::new(self.nsp, self.tls_config, self.opening_headers);
         if let Some(callbacks) = self.on {
             for (event, callback) in callbacks {
-                socket.on(event, Box::new(callback)).unwrap();
+                socket.on(event.into(), Box::new(callback)).unwrap();
             }
         }
         socket.connect(self.address)?;

@@ -5,9 +5,10 @@ use crate::{
     engineio::{
         packet::{Packet as EnginePacket, PacketId as EnginePacketId},
         socket::{EngineClient, EngineIOSocket},
-        transport_emitter::EventEmitter,
+        event::Event as EngineEvent,
     },
     Socket,
+    event::EventEmitter
 };
 use bytes::Bytes;
 use native_tls::TlsConnector;
@@ -22,13 +23,14 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
+use std::{collections::HashMap};
 
 use super::{event::Event, payload::Payload};
 
 /// The type of a callback function.
-pub(crate) type Callback<I> = RwLock<Box<dyn FnMut(I, Socket) + 'static + Sync + Send>>;
+pub(crate) type Callback = RwLock<Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>>;
 
-pub(crate) type EventCallback = (Event, Callback<Payload>);
+pub(crate) type EventCallback = (Event, Callback);
 /// Represents an `Ack` as given back to the caller. Holds the internal `id` as
 /// well as the current ack'ed state. Holds data which will be accessible as
 /// soon as the ack'ed state is set to true. An `Ack` that didn't get ack'ed
@@ -37,7 +39,7 @@ pub struct Ack {
     pub id: i32,
     timeout: Duration,
     time_started: Instant,
-    callback: Callback<Payload>,
+    callback: Callback,
 }
 
 /// Handles communication in the `socket.io` protocol.
@@ -52,6 +54,7 @@ pub struct SocketIOSocket {
     unfinished_packet: Arc<RwLock<Option<SocketPacket>>>,
     // namespace, for multiplexing messages
     pub(crate) nsp: Arc<Option<String>>,
+    callbacks: Arc<RwLock<HashMap<Event, Vec<Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>>>>>,
 }
 
 impl SocketIOSocket {
@@ -73,19 +76,6 @@ impl SocketIOSocket {
             unfinished_packet: Arc::new(RwLock::new(None)),
             nsp: Arc::new(nsp),
         }
-    }
-
-    /// Registers a new callback for a certain event. This returns an
-    /// `Error::IllegalActionAfterOpen` error if the callback is registered
-    /// after a call to the `connect` method.
-    pub fn on<F>(&mut self, event: Event, callback: Box<F>) -> Result<()>
-    where
-        F: FnMut(Payload, Socket) + 'static + Sync + Send,
-    {
-        Arc::get_mut(&mut self.on)
-            .unwrap()
-            .push((event, RwLock::new(callback)));
-        Ok(())
     }
 
     /// Sends a `socket.io` packet to the server using the `engine.io` client.
@@ -395,7 +385,7 @@ impl SocketIOSocket {
         let error_callback = move |msg| {
             if let Some(function) = clone_self.get_event_callback(&Event::Error) {
                 let mut lock = function.1.write().unwrap();
-                lock(Payload::String(msg), clone_self.clone());
+                lock(Payload::Binary(msg), clone_self.clone());
                 drop(lock)
             }
         };
@@ -424,16 +414,16 @@ impl SocketIOSocket {
             }
         };
 
-        self.engine_socket.write()?.set_on_open(open_callback)?;
+        self.engine_socket.write()?.on(EngineEvent::Open, open_callback)?;
 
-        self.engine_socket.write()?.set_on_error(error_callback)?;
+        self.engine_socket.write()?.on(EngineEvent::Error, error_callback)?;
 
-        self.engine_socket.write()?.set_on_close(close_callback)?;
+        self.engine_socket.write()?.on(EngineEvent::Close, close_callback)?;
 
         let clone_self = self.clone();
         self.engine_socket
             .write()?
-            .set_on_data(move |data| Self::handle_new_message(data, &clone_self))
+            .on(EngineEvent::Data, move |data| Self::handle_new_message(data, &clone_self))
     }
 
     /// Handles a binary event.
@@ -503,12 +493,43 @@ impl SocketIOSocket {
 
     /// A convenient method for finding a callback for a certain event.
     #[inline]
-    fn get_event_callback(&self, event: &Event) -> Option<&(Event, Callback<Payload>)> {
+    fn get_event_callback(&self, event: &Event) -> Option<&(Event, Callback)> {
         self.on.iter().find(|item| item.0 == *event)
     }
 
     fn is_engineio_connected(&self) -> Result<bool> {
         self.engine_socket.read()?.is_connected()
+    }
+}
+
+impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
+    fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T, callback: Option<Callback>) -> Result<()> {
+        self.emit(event, Payload::Binary(bytes.into()))
+    }
+
+    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
+        Arc::get_mut(&mut self.callbacks)
+            .unwrap()
+            .write()?
+            .get(&event).unwrap()
+            .push(Box::new(callback));
+        Ok(())
+    }
+
+    fn off(&mut self, event: Event, callback: Option<Callback>) -> Result<()> {
+        let map = Arc::get_mut(&mut self.callbacks)
+            .unwrap()
+            .write()?;
+        match callback {
+
+            Some(callback) => {
+                map.get(&event).unwrap().retain(|x| Box::into_raw(*x) != Box::into_raw(callback));
+            },
+            None => {
+                map.insert(event,Vec::new()).unwrap();
+            }
+        }
+        Ok(())
     }
 }
 

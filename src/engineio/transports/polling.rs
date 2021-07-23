@@ -1,4 +1,4 @@
-use crate::engineio::transports::Transport;
+use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use native_tls::TlsConnector;
@@ -8,7 +8,7 @@ use reqwest::{
 };
 use std::sync::{Arc, Mutex};
 
-pub(super) struct PollingTransport {
+pub(crate) struct PollingTransport {
     client: Arc<Mutex<Client>>,
 }
 
@@ -72,5 +72,9 @@ impl Transport for PollingTransport {
         // we won't use the shared client as this blocks the resource
         // in the long polling requests
         Ok(Client::new().get(address).send().unwrap().bytes().unwrap())
+    }
+
+    fn name(&self) -> &str {
+        "polling"
     }
 }
