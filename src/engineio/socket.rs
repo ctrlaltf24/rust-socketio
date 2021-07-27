@@ -279,27 +279,13 @@ impl Client for EngineIOSocket {
     /// we try to upgrade the connection. Afterwards a first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
     fn connect<T: Into<String> + Clone>(&mut self, address: T) -> Result<()> {
-        // build the query path, random_t is used to prevent browser caching
-        let query_path = self.get_query_path()?;
-
-        if let Ok(mut full_address) = Url::parse(&(address.to_owned().into() + &query_path)) {
+        if let Ok(_) = Url::parse(&(address.to_owned().into())) {
             self.host_address = Arc::new(Mutex::new(Some(address.into())));
 
-            // change the url scheme here if necessary, unwrapping here is
-            // safe as both http and https are valid schemes for sure
-            match full_address.scheme() {
-                "ws" => full_address.set_scheme("http").unwrap(),
-                "wss" => full_address.set_scheme("https").unwrap(),
-                "http" | "https" => (),
-                _ => return Err(Error::InvalidUrl(full_address.to_string())),
-            }
+            let packets = self.poll()?;
 
-            let response = self.transport.read()?.poll(full_address.to_string())?;
-
-            let handshake: Result<HandshakePacket> = Packet::decode(response.clone())?.try_into();
-
-            // the response contains the handshake data
-            if let Ok(conn_data) = handshake {
+            if packets.is_some() {
+                let conn_data: HandshakePacket = packets.unwrap().get(0).unwrap().clone().try_into()?;
                 self.connected.store(true, Ordering::Release);
 
                 // check if we could upgrade to websockets
@@ -331,8 +317,7 @@ impl Client for EngineIOSocket {
 
                 Ok(())
             } else {
-                let error =
-                    Error::HandshakeError(std::str::from_utf8(response[..].as_ref())?.to_owned());
+                let error = Error::HandshakeError("Empty response".to_owned());
                 self.callback(Event::Error,format!("{}", error))?;
                 Err(error)
             }
