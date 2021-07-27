@@ -8,7 +8,6 @@ use crate::{
         event::Event as EngineEvent,
     },
     Socket,
-    event::EventEmitter
 };
 use bytes::Bytes;
 use native_tls::TlsConnector;
@@ -25,12 +24,14 @@ use std::{
 };
 use std::{collections::HashMap};
 
+use crate::event::EventEmitter;
+
 use super::{event::Event, payload::Payload};
 
 /// The type of a callback function.
-pub(crate) type Callback = RwLock<Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>>;
+pub(crate) type Callback = Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>;
 
-pub(crate) type EventCallback = (Event, Callback);
+pub(crate) type EventCallback = (Event, RwLock<Callback>);
 /// Represents an `Ack` as given back to the caller. Holds the internal `id` as
 /// well as the current ack'ed state. Holds data which will be accessible as
 /// soon as the ack'ed state is set to true. An `Ack` that didn't get ack'ed
@@ -39,7 +40,7 @@ pub struct Ack {
     pub id: i32,
     timeout: Duration,
     time_started: Instant,
-    callback: Callback,
+    callback: RwLock<Callback>,
 }
 
 /// Handles communication in the `socket.io` protocol.
@@ -54,7 +55,7 @@ pub struct SocketIOSocket {
     unfinished_packet: Arc<RwLock<Option<SocketPacket>>>,
     // namespace, for multiplexing messages
     pub(crate) nsp: Arc<Option<String>>,
-    callbacks: Arc<RwLock<HashMap<Event, Vec<Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>>>>>,
+    callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
 }
 
 impl SocketIOSocket {
@@ -64,6 +65,11 @@ impl SocketIOSocket {
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
+        let mut callbacks = HashMap::new();
+        callbacks.insert(Event::Close, Vec::new());
+        callbacks.insert(Event::Connect, Vec::new());
+        callbacks.insert(Event::Error, Vec::new());
+        callbacks.insert(Event::Message, Vec::new());
         SocketIOSocket {
             engine_socket: Arc::new(RwLock::new(EngineIOSocket::new(
                 Some("socket.io".to_owned()),
@@ -75,6 +81,7 @@ impl SocketIOSocket {
             outstanding_acks: Arc::new(RwLock::new(Vec::new())),
             unfinished_packet: Arc::new(RwLock::new(None)),
             nsp: Arc::new(nsp),
+            callbacks: Arc::new(RwLock::new(callbacks)),
         }
     }
 
@@ -493,7 +500,7 @@ impl SocketIOSocket {
 
     /// A convenient method for finding a callback for a certain event.
     #[inline]
-    fn get_event_callback(&self, event: &Event) -> Option<&(Event, Callback)> {
+    fn get_event_callback(&self, event: &Event) -> Option<&(Event, RwLock<Callback>)> {
         self.on.iter().find(|item| item.0 == *event)
     }
 
@@ -503,7 +510,7 @@ impl SocketIOSocket {
 }
 
 impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
-    fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T, callback: Option<Callback>) -> Result<()> {
+    fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T) -> Result<()> {
         self.emit(event, Payload::Binary(bytes.into()))
     }
 
@@ -511,24 +518,16 @@ impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
         Arc::get_mut(&mut self.callbacks)
             .unwrap()
             .write()?
-            .get(&event).unwrap()
-            .push(Box::new(callback));
+            .get_mut(&event).unwrap()
+            .push(callback);
         Ok(())
     }
 
-    fn off(&mut self, event: Event, callback: Option<Callback>) -> Result<()> {
-        let map = Arc::get_mut(&mut self.callbacks)
+    fn off(&mut self, event: Event) -> Result<()> {
+        let mut map = Arc::get_mut(&mut self.callbacks)
             .unwrap()
             .write()?;
-        match callback {
-
-            Some(callback) => {
-                map.get(&event).unwrap().retain(|x| Box::into_raw(*x) != Box::into_raw(callback));
-            },
-            None => {
-                map.insert(event,Vec::new()).unwrap();
-            }
-        }
+        map.insert(event,Vec::new()).unwrap();
         Ok(())
     }
 }

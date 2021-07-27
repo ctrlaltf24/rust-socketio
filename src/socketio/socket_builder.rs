@@ -3,7 +3,7 @@ use crate::client::Client;
 use crate::error::{Error, Result};
 use native_tls::TlsConnector;
 use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};
-pub use crate::event::EventEmitter;
+use crate::event::EventEmitter;
 
 type SocketCallback = dyn FnMut(Payload, Socket) + 'static + Sync + Send;
 

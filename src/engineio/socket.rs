@@ -13,6 +13,7 @@ use std::convert::TryInto;
 use std::time::SystemTime;
 use std::{sync::atomic::Ordering};
 use std::{
+    fmt::Debug,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -34,9 +35,8 @@ pub struct EngineIOSocket {
     connection_data: Arc<RwLock<Option<HandshakePacket>>>,
     root_path: Arc<RwLock<String>>,
     callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
-    // immutable
-    opening_headers: Arc<Option<HeaderMap>>,
-    tls_config: Arc<Option<TlsConnector>>,
+    opening_headers: Arc<RwLock<Option<HeaderMap>>>,
+    tls_config: Arc<RwLock<Option<TlsConnector>>>,
 }
 
 impl EngineIOSocket {
@@ -46,7 +46,7 @@ impl EngineIOSocket {
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
-        let callbacks = HashMap::new();
+        let mut callbacks = HashMap::new();
         callbacks.insert(Event::Close, Vec::new());
         callbacks.insert(Event::Data, Vec::new());
         callbacks.insert(Event::Error, Vec::new());
@@ -54,8 +54,8 @@ impl EngineIOSocket {
         callbacks.insert(Event::Packet, Vec::new());
         EngineIOSocket {
             transport: Arc::new(RwLock::new(Box::new(PollingTransport::new(
-                tls_config,
-                opening_headers,
+                tls_config.clone(),
+                opening_headers.clone(),
             )))),
             connected: Arc::new(AtomicBool::default()),
             last_ping: Arc::new(Mutex::new(Instant::now())),
@@ -66,8 +66,8 @@ impl EngineIOSocket {
                 root_path.unwrap_or_else(|| "engine.io".to_owned()),
             )),
             callbacks: Arc::new(RwLock::new(callbacks)),
-            opening_headers: Arc::new(opening_headers),
-            tls_config: Arc::new(tls_config),
+            opening_headers: Arc::new(RwLock::new(opening_headers)),
+            tls_config: Arc::new(RwLock::new(tls_config)),
         }
     }
 
@@ -102,12 +102,14 @@ impl EngineIOSocket {
                 .append_pair("sid", new_sid)
                 .finish();
 
+            let tls_config = self.tls_config.read()?.clone();
+
             match full_address.scheme() {
                 "https" => {
-                    *self.transport.write()? = Box::new(WebsocketSecureTransport::new(full_address.to_string(), *self.tls_config.as_ref(), self.get_ws_headers()));
+                    *self.transport.write()? = Box::new(WebsocketSecureTransport::new(full_address.to_string(), tls_config, self.get_ws_headers()?));
                 }
                 "http" => {
-                    *self.transport.write()? = Box::new(WebsocketTransport::new(full_address.to_string(), self.get_ws_headers()));
+                    *self.transport.write()? = Box::new(WebsocketTransport::new(full_address.to_string(), self.get_ws_headers()?));
                 }
                 _ => return Err(Error::InvalidUrl(full_address.to_string())),
             }
@@ -192,10 +194,11 @@ impl EngineIOSocket {
     /// Calls the error callback with a given message.
     #[inline]
     fn callback<T: Into<Bytes>>(&self, event: Event, payload: T) -> Result<()> {
-        let transport = self.transport.read()?;
-        let functions = self.callbacks.read()?.get(&event).unwrap();
+        let callbacks = self.callbacks.read()?;
+        let functions = callbacks.get(&event).unwrap();
+        let bytes = payload.into();
         for function in functions {
-            spawn_scoped!(function(payload.into()));
+            spawn_scoped!(function(bytes.clone()));
         }
         Ok(())
     }
@@ -224,29 +227,30 @@ impl EngineIOSocket {
         }
     }
 
-    fn get_ws_headers(&self) -> Headers {
+    fn get_ws_headers(&self) -> Result<Headers> {
         let mut headers = Headers::new();
         // SAFETY: unwrapping is safe as we only hand out `Weak` copies after the connection procedure
-        if self.opening_headers.is_some() {
-            for (key, val) in self.opening_headers.unwrap() {
+        if self.opening_headers.read()?.is_some() {
+            let opening_headers = self.opening_headers.read()?;
+            for (key, val) in opening_headers.clone().unwrap() {
                 headers.append_raw(key.unwrap().to_string(), val.as_bytes().to_owned());
             }
         }
-        headers
+        Ok(headers)
     }
     pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()> where T: Fn(Bytes) + 'static + Sync + Send {
         // For some reason it doesn't resolve types correctly in a generic trait.
         Arc::get_mut(&mut self.callbacks)
             .unwrap()
             .write()?
-            .get(&event).unwrap()
+            .get_mut(&event).unwrap()
             .push(Box::new(callback));
         Ok(())
     }
 }
 
 impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
-    fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T, callback: Option<Callback>) -> Result<()> {
+    fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T) -> Result<()> {
         self.emit(Packet::new(event, bytes.into()), false)
     }
 
@@ -254,24 +258,16 @@ impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
         Arc::get_mut(&mut self.callbacks)
             .unwrap()
             .write()?
-            .get(&event).unwrap()
+            .get_mut(&event).unwrap()
             .push(callback);
         Ok(())
     }
 
-    fn off(&mut self, event: Event, callback: Option<Callback>) -> Result<()> {
-        let map = Arc::get_mut(&mut self.callbacks)
+    fn off(&mut self, event: Event) -> Result<()> {
+        let mut map = Arc::get_mut(&mut self.callbacks)
             .unwrap()
             .write()?;
-        match callback {
-
-            Some(callback) => {
-                map.get(&event).unwrap().retain(|x| Box::into_raw(*x) != Box::into_raw(callback));
-            },
-            None => {
-                map.insert(event,Vec::new()).unwrap();
-            }
-        }
+        map.insert(event,Vec::new()).unwrap();
         Ok(())
     }
 }
@@ -353,6 +349,21 @@ impl Client for EngineIOSocket {
         let packet = Packet::new(PacketId::Close, Bytes::from_static(&[]));
         self.connected.store(false, Ordering::Release);
         self.emit(packet, false)
+    }
+}
+
+impl Debug for EngineIOSocket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("EngineIOSocket(connected: {:?}, connection_data: {:?}, host_address: {:?}, last_ping: {:?}, last_pong: {:?}, opening_headers: {:?}, root_path: {:?}, tls_config: {:?}, transport: ?)",
+            self.connected,
+            self.connection_data,
+            self.host_address,
+            self.last_ping,
+            self.last_pong,
+            self.opening_headers,
+            self.root_path,
+            self.tls_config,
+        ))
     }
 }
 
