@@ -279,7 +279,7 @@ impl Client for EngineIOSocket {
     /// we try to upgrade the connection. Afterwards a first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
     fn connect<T: Into<String> + Clone>(&mut self, address: T) -> Result<()> {
-        if let Ok(_) = Url::parse(&(address.to_owned().into())) {
+        if Url::parse(&(address.to_owned().into())).is_ok() {
             self.host_address = Arc::new(Mutex::new(Some(address.into())));
 
             let packets = self.poll()?;
