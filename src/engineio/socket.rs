@@ -5,12 +5,10 @@ use crate::engineio::transports::{polling::PollingTransport, websocket_secure::W
 use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
 use super::event::Event;
-use adler32::adler32;
 use bytes::Bytes;
 use native_tls::TlsConnector;
 use reqwest::{header::HeaderMap, Url};
 use std::convert::TryInto;
-use std::time::SystemTime;
 use std::{sync::atomic::Ordering};
 use std::{
     fmt::Debug,
@@ -31,9 +29,8 @@ pub struct EngineIOSocket {
     pub connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
     last_pong: Arc<Mutex<Instant>>,
-    host_address: Arc<Mutex<Option<String>>>,
+    base_url: Arc<RwLock<Url>>,
     connection_data: Arc<RwLock<Option<HandshakePacket>>>,
-    root_path: Arc<RwLock<String>>,
     callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
     opening_headers: Arc<RwLock<Option<HeaderMap>>>,
     tls_config: Arc<RwLock<Option<TlsConnector>>>,
@@ -42,6 +39,7 @@ pub struct EngineIOSocket {
 impl EngineIOSocket {
     /// Creates an instance of `EngineIOSocket`.
     pub fn new(
+        host_address: String,
         root_path: Option<String>,
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
@@ -52,22 +50,22 @@ impl EngineIOSocket {
         callbacks.insert(Event::Error, Vec::new());
         callbacks.insert(Event::Open, Vec::new());
         callbacks.insert(Event::Packet, Vec::new());
+        let mut url = Url::parse(&(host_address+&root_path.unwrap_or_else(|| "/engine.io".to_owned()))[..]).unwrap();
+        let base_url = url.query_pairs_mut().append_pair("EIO", "4").finish().clone();
         EngineIOSocket {
             transport: Arc::new(RwLock::new(Box::new(PollingTransport::new(
+                base_url.clone(),
                 tls_config.clone(),
                 opening_headers.clone(),
             )))),
             connected: Arc::new(AtomicBool::default()),
             last_ping: Arc::new(Mutex::new(Instant::now())),
             last_pong: Arc::new(Mutex::new(Instant::now())),
-            host_address: Arc::new(Mutex::new(None)),
             connection_data: Arc::new(RwLock::new(None)),
-            root_path: Arc::new(RwLock::new(
-                root_path.unwrap_or_else(|| "engine.io".to_owned()),
-            )),
             callbacks: Arc::new(RwLock::new(callbacks)),
             opening_headers: Arc::new(RwLock::new(opening_headers)),
             tls_config: Arc::new(RwLock::new(tls_config)),
+            base_url: Arc::new(RwLock::new(base_url))
         }
     }
 
@@ -84,39 +82,24 @@ impl EngineIOSocket {
     /// - if the client receives that both sides can be sure that the upgrade is save and the client requests
     ///   the final upgrade by sending another `update` packet over `websocket`.
     /// If this procedure is alright, the new transport is established.
-    fn upgrade_connection(&mut self, new_sid: &str) -> Result<()> {
-        let host_address = self.host_address.lock()?;
-        if let Some(address) = &*host_address {
-            // unwrapping here is in fact save as we only set this url if it gets orderly parsed
-            let mut address = Url::parse(&address).unwrap();
-            drop(host_address);
+    fn upgrade_connection(&mut self) -> Result<()> {
+        let tls_config = self.tls_config.read()?.clone();
 
-            address
-                .set_path(&(address.path().to_owned() + self.root_path.read()?[..].as_ref() + "/"));
+        let full_address = self.base_url.read()?.clone();
+        let base_url = websocket::url::Url::parse(&full_address.to_string()[..])?;
+        drop(full_address);
 
-            let full_address = address
-                .query_pairs_mut()
-                .clear()
-                .append_pair("EIO", "4")
-                .append_pair("transport", "websocket")
-                .append_pair("sid", new_sid)
-                .finish();
-
-            let tls_config = self.tls_config.read()?.clone();
-
-            match full_address.scheme() {
-                "https" => {
-                    *self.transport.write()? = Box::new(WebsocketSecureTransport::new(full_address.to_string(), tls_config, self.get_ws_headers()?));
-                }
-                "http" => {
-                    *self.transport.write()? = Box::new(WebsocketTransport::new(full_address.to_string(), self.get_ws_headers()?));
-                }
-                _ => return Err(Error::InvalidUrl(full_address.to_string())),
+        match base_url.scheme() {
+            "https" => {
+                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(base_url, tls_config, self.get_ws_headers()?));
             }
-
-            return Ok(());
+            "http" => {
+                *self.transport.write()? = Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
+            }
+            _ => return Err(Error::InvalidUrl(base_url.to_string())),
         }
-        Err(Error::HandshakeError("Error - invalid url".to_owned()))
+
+        Ok(())
     }
 
     /// Sends a packet to the server. This optionally handles sending of a
@@ -127,12 +110,6 @@ impl EngineIOSocket {
             self.callback(Event::Error,format!("{}", error))?;
             return Err(error);
         }
-        // build the target address
-        let query_path = self.get_query_path()?;
-
-        let host = self.host_address.lock()?;
-        let address = Url::parse(&(host.as_ref().unwrap().to_owned() + &query_path)[..]).unwrap();
-        drop(host);
 
         // send a post request with the encoded payload as body
         // if this is a binary attachment, then send the raw bytes
@@ -145,7 +122,7 @@ impl EngineIOSocket {
         if let Err(error) = self
             .transport
             .read()?
-            .emit(address.to_string(), data, is_binary_att)
+            .emit(data, is_binary_att)
         {
             self.callback(Event::Error,error.to_string())?;
             return Err(error);
@@ -154,41 +131,9 @@ impl EngineIOSocket {
         Ok(())
     }
 
-    /// Produces a random String that is used to prevent browser caching.
-    #[inline]
-    fn get_hashed_time(&self) -> String {
-        let reader = format!("{:#?}", SystemTime::now());
-        let hash = adler32(reader.as_bytes()).unwrap();
-        hash.to_string()
-    }
-
     // Check if the underlying transport client is connected.
     pub(crate) fn is_connected(&self) -> Result<bool> {
         Ok(self.connected.load(Ordering::Acquire))
-    }
-
-    // Constructs the path for a request, depending on the different situations.
-    #[inline]
-    fn get_query_path(&self) -> Result<String> {
-        // build the base path
-        let mut path = format!(
-            "/{}/?EIO=4&transport={}&t={}",
-            self.root_path.read()?,
-            self.transport.read()?.name(),
-            self.get_hashed_time(),
-        );
-
-        // append a session id if the socket is connected
-        // unwrapping is safe as a connected socket always
-        // holds its connection data
-        if self.connected.load(Ordering::Acquire) {
-            path.push_str(&format!(
-                "&sid={}",
-                (*self.connection_data).read()?.as_ref().unwrap().sid
-            ));
-        }
-
-        Ok(path)
     }
 
     /// Calls the error callback with a given message.
@@ -206,14 +151,8 @@ impl EngineIOSocket {
     /// Polls for next payload
     pub(crate) fn poll(&self) -> Result<Option<Vec<Packet>>> {
         if self.connected.load(Ordering::Acquire) {
-            let query_path = self.get_query_path()?.to_owned();
-
-            let host = self.host_address.lock()?;
-            let address =
-                Url::parse(&(host.as_ref().unwrap().to_owned() + &query_path)[..]).unwrap();
-            drop(host);
             let transport = self.transport.read()?;
-            let data = transport.poll(address.to_string())?;
+            let data = transport.poll()?;
             drop(transport);
 
             if data.is_empty() {
@@ -278,51 +217,49 @@ impl Client for EngineIOSocket {
     /// response. If the handshake data mentions a websocket upgrade possibility,
     /// we try to upgrade the connection. Afterwards a first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
-    fn connect<T: Into<String> + Clone>(&mut self, address: T) -> Result<()> {
-        if Url::parse(&(address.to_owned().into())).is_ok() {
-            self.host_address = Arc::new(Mutex::new(Some(address.into())));
+    fn connect(&mut self) -> Result<()> {
+        let packets = self.poll()?;
 
-            let packets = self.poll()?;
+        if packets.is_some() {
+            let conn_data: HandshakePacket = packets.unwrap().get(0).unwrap().clone().try_into()?;
+            self.connected.store(true, Ordering::Release);
 
-            if packets.is_some() {
-                let conn_data: HandshakePacket = packets.unwrap().get(0).unwrap().clone().try_into()?;
-                self.connected.store(true, Ordering::Release);
+            // check if we could upgrade to websockets
+            let websocket_upgrade = conn_data
+                .upgrades
+                .iter()
+                .any(|upgrade| upgrade.to_lowercase() == *"websocket");
 
-                // check if we could upgrade to websockets
-                let websocket_upgrade = conn_data
-                    .upgrades
-                    .iter()
-                    .any(|upgrade| upgrade.to_lowercase() == *"websocket");
+            // update the base_url with the new sid
+            let mut base_url = self.base_url.write()?;
+            let new_base_url = base_url.query_pairs_mut().append_pair("sid",&conn_data.sid[..]).finish().clone();
+            *base_url = new_base_url;
+            drop(base_url);
 
-                // if we have an upgrade option, send the corresponding request, if this doesn't work
-                // for some reason, proceed via polling
-                if websocket_upgrade {
-                    let _ = self.upgrade_connection(&conn_data.sid);
-                }
-
-                // set the connection data
-                let mut connection_data = self.connection_data.write()?;
-                *connection_data = Some(conn_data);
-                drop(connection_data);
-
-                self.callback(Event::Open, "")?;
-
-                // set the last ping to now and set the connected state
-                *self.last_ping.lock()? = Instant::now();
-
-                let _test = self.transport.is_poisoned();
-
-                // emit a pong packet to keep trigger the ping cycle on the server
-                self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
-
-                Ok(())
-            } else {
-                let error = Error::HandshakeError("Empty response".to_owned());
-                self.callback(Event::Error,format!("{}", error))?;
-                Err(error)
+            // if we have an upgrade option, send the corresponding request, if this doesn't work
+            // for some reason, proceed via polling
+            if websocket_upgrade {
+                let _ = self.upgrade_connection();
             }
+
+            // set the connection data
+            let mut connection_data = self.connection_data.write()?;
+            *connection_data = Some(conn_data);
+            drop(connection_data);
+
+            self.callback(Event::Open, "")?;
+
+            // set the last ping to now and set the connected state
+            *self.last_ping.lock()? = Instant::now();
+
+            let _test = self.transport.is_poisoned();
+
+            // emit a pong packet to keep trigger the ping cycle on the server
+            self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
+
+            Ok(())
         } else {
-            let error = Error::InvalidUrl(address.into());
+            let error = Error::HandshakeError("Empty response".to_owned());
             self.callback(Event::Error,format!("{}", error))?;
             Err(error)
         }
@@ -339,14 +276,13 @@ impl Client for EngineIOSocket {
 
 impl Debug for EngineIOSocket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("EngineIOSocket(connected: {:?}, connection_data: {:?}, host_address: {:?}, last_ping: {:?}, last_pong: {:?}, opening_headers: {:?}, root_path: {:?}, tls_config: {:?}, transport: ?)",
+        f.write_fmt(format_args!("EngineIOSocket(connected: {:?}, connection_data: {:?}, base_url: {:?}, last_ping: {:?}, last_pong: {:?}, opening_headers: {:?}, tls_config: {:?}, transport: ?)",
             self.connected,
             self.connection_data,
-            self.host_address,
+            self.base_url,
             self.last_ping,
             self.last_pong,
             self.opening_headers,
-            self.root_path,
             self.tls_config,
         ))
     }
@@ -449,11 +385,11 @@ mod test {
     
     #[test]
     fn test_connection_polling_packets() -> Result<()> {
-        let mut socket = EngineIOSocket::new(None, None, None);
-
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
-        socket.connect(url)?;
+        let mut socket = EngineIOSocket::new(url, None, None, None);
+
+        socket.connect()?;
 
         // Our testing server is set up to send hello client on startup
         {
@@ -504,13 +440,14 @@ mod test {
 
         let mut headers = HeaderMap::new();
         headers.insert(HOST, host.parse().unwrap());
-        let mut socket =
-            EngineIOSocket::new(None, Some(get_tls_connector().unwrap()), Some(headers));
 
         let url = std::env::var("ENGINE_IO_SECURE_SERVER")
             .unwrap_or_else(|_| SERVER_URL_SECURE.to_owned());
 
-        socket.connect(url).unwrap();
+        let mut socket =
+            EngineIOSocket::new(url, None, Some(get_tls_connector().unwrap()), Some(headers));
+
+        socket.connect().unwrap();
 
         assert!(socket
             .emit(
@@ -540,25 +477,27 @@ mod test {
 
     #[test]
     fn test_open_invariants() {
-        let mut sut = EngineIOSocket::new(None, None, None);
-        let illegal_url = "this is illegal";
+        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
-        let _error = sut.connect(illegal_url).expect_err("Error");
+        let illegal_url = "this is illegal";
+        let mut sut = EngineIOSocket::new(illegal_url.to_owned(), None, None, None);
+
+        let _error = sut.connect().expect_err("Error");
         assert!(matches!(
             Error::InvalidUrl(String::from("this is illegal")),
             _error
         ));
 
-        let mut sut = EngineIOSocket::new(None, None, None);
         let invalid_protocol = "file:///tmp/foo";
+        let mut sut = EngineIOSocket::new(invalid_protocol.to_owned(), None, None, None);
 
-        let _error = sut.connect(invalid_protocol).expect_err("Error");
+        let _error = sut.connect().expect_err("Error");
         assert!(matches!(
             Error::InvalidUrl(String::from("file://localhost:4200")),
             _error
         ));
 
-        let sut = EngineIOSocket::new(None, None, None);
+        let sut = EngineIOSocket::new(url.clone(), None, None, None);
         let _error = sut
             .emit(Packet::new(PacketId::Close, Bytes::from_static(b"")), false)
             .expect_err("error");
@@ -571,6 +510,7 @@ mod test {
         headers.insert(HOST, host.parse().unwrap());
 
         let _ = EngineIOSocket::new(
+            url.clone(),
             None,
             Some(
                 TlsConnector::builder()
@@ -581,12 +521,13 @@ mod test {
             None,
         );
 
-        let _ = EngineIOSocket::new(None, None, Some(headers));
+        let _ = EngineIOSocket::new(url, None, None, Some(headers));
     }
 
     #[test]
     fn test_illegal_actions() {
-        let sut = EngineIOSocket::new(None, None, None);
+        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+        let sut = EngineIOSocket::new(url, None, None, None);
         assert!(sut.poll_cycle().is_err());
 
         assert!(sut
@@ -604,7 +545,9 @@ mod test {
 
     #[test]
     fn test_basic_connection() {
-        let mut socket = EngineIOSocket::new(None, None, None);
+        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+    
+        let mut socket = EngineIOSocket::new(url, None, None, None);
 
         assert!(socket
             .on(Event::Open, |_| {
@@ -624,9 +567,7 @@ mod test {
             })
             .is_ok());
 
-        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
-
-        assert!(socket.connect(url).is_ok());
+        assert!(socket.connect().is_ok());
 
         assert!(socket
             .emit(

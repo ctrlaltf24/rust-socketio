@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use native_tls::TlsConnector;
 use std::borrow::Cow;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use websocket::{
     client::sync::Client as WsClient,
     dataframe::Opcode,
@@ -12,16 +12,19 @@ use websocket::{
     sync::stream::{TcpStream, TlsStream},
     ws::dataframe::DataFrame,
     ClientBuilder as WsClientBuilder, Message,
+    client::Url
 };
 
 pub(crate) struct WebsocketSecureTransport {
     client: Arc<Mutex<WsClient<TlsStream<TcpStream>>>>,
+    base_url: Arc<RwLock<String>>
 }
 
 impl WebsocketSecureTransport {
     /// Creates an instance of `TransportClient`.
-    pub fn new(address: String, tls_config: Option<TlsConnector>, headers: Headers) -> Self {
-        let client = WsClientBuilder::new(address[..].as_ref())
+    pub fn new(base_url: Url, tls_config: Option<TlsConnector>, headers: Headers) -> Self {
+        let url = base_url.clone().query_pairs_mut().append_pair("transport","websocket").finish().clone();
+        let client = WsClientBuilder::new(base_url.to_string()[..].as_ref())
             .unwrap()
             .custom_headers(&headers)
             .connect_secure(tls_config)
@@ -31,6 +34,7 @@ impl WebsocketSecureTransport {
 
         WebsocketSecureTransport {
             client: Arc::new(Mutex::new(client)),
+            base_url: Arc::new(RwLock::new(url.to_string()))
         }
     }
 
@@ -64,7 +68,7 @@ impl WebsocketSecureTransport {
 }
 
 impl Transport for WebsocketSecureTransport {
-    fn emit(&self, _: String, data: Bytes, is_binary_att: bool) -> Result<()> {
+    fn emit(&self, data: Bytes, is_binary_att: bool) -> Result<()> {
         let mut writer = self.client.lock()?;
 
         let message = if is_binary_att {
@@ -77,7 +81,7 @@ impl Transport for WebsocketSecureTransport {
         Ok(())
     }
 
-    fn poll(&self, _: String) -> Result<Bytes> {
+    fn poll(&self) -> Result<Bytes> {
         let mut receiver = self.client.lock()?;
 
         // if this is a binary payload, we mark it as a message
@@ -94,7 +98,12 @@ impl Transport for WebsocketSecureTransport {
         }
     }
 
-    fn name(&self) -> &str {
-        "websocket"
+    fn base_url(&self) -> Result<String> {
+        Ok(self.base_url.read()?.clone())
+    }
+
+    fn set_base_url(&self, url: String) -> Result<()> {
+        *self.base_url.write()? = url;
+        Ok(())
     }
 }

@@ -133,7 +133,7 @@ mod test {
     fn it_works() {
         let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
-        let mut socket = Socket::new(None, None, None);
+        let mut socket = Socket::new(url, None, None, None);
 
         let result = socket.on(
             "test".into(),
@@ -144,7 +144,7 @@ mod test {
         );
         assert!(result.is_ok());
 
-        let result = socket.connect(url);
+        let result = socket.connect();
         assert!(result.is_ok());
 
         let payload = json!({"token": 123});

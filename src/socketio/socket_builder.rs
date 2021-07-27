@@ -185,13 +185,13 @@ impl SocketBuilder {
     /// assert!(result.is_ok());
     /// ```
     pub fn connect(self) -> Result<Socket> {
-        let mut socket = Socket::new(self.nsp, self.tls_config, self.opening_headers);
+        let mut socket = Socket::new(self.address, self.nsp, self.tls_config, self.opening_headers);
         if let Some(callbacks) = self.on {
             for (event, callback) in callbacks {
                 socket.on(event, Box::new(callback)).unwrap();
             }
         }
-        socket.connect(self.address)?;
+        socket.connect()?;
         Ok(socket)
     }
 }

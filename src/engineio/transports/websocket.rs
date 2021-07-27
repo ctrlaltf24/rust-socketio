@@ -3,21 +3,24 @@ use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use websocket::{
     dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream, sync::Writer,
     ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
+    client::Url
 };
 
 pub(crate) struct WebsocketTransport {
     sender: Arc<Mutex<Writer<TcpStream>>>,
     receiver: Arc<Mutex<Reader<TcpStream>>>,
+    base_url: Arc<RwLock<String>>
 }
 
 impl WebsocketTransport {
     /// Creates an instance of `TransportClient`.
-    pub fn new(address: String, headers: Headers) -> Self {
-        let client = WsClientBuilder::new(address[..].as_ref())
+    pub fn new(base_url: Url, headers: Headers) -> Self {
+        let url = base_url.clone().query_pairs_mut().append_pair("transport","websocket").finish().clone();
+        let client = WsClientBuilder::new(base_url[..].as_ref())
             .unwrap()
             .custom_headers(&headers)
             .connect_insecure()
@@ -30,6 +33,7 @@ impl WebsocketTransport {
         WebsocketTransport {
             sender: Arc::new(Mutex::new(sender)),
             receiver: Arc::new(Mutex::new(receiver)),
+            base_url: Arc::new(RwLock::new(url.to_string()))
         }
     }
 
@@ -64,7 +68,7 @@ impl WebsocketTransport {
 }
 
 impl Transport for WebsocketTransport {
-    fn emit(&self, _: String, data: Bytes, is_binary_att: bool) -> Result<()> {
+    fn emit(&self, data: Bytes, is_binary_att: bool) -> Result<()> {
         let mut sender = self.sender.lock()?;
 
         let message = if is_binary_att {
@@ -77,7 +81,7 @@ impl Transport for WebsocketTransport {
         Ok(())
     }
 
-    fn poll(&self, _: String) -> Result<Bytes> {
+    fn poll(&self) -> Result<Bytes> {
         let mut receiver = self.receiver.lock()?;
 
         // if this is a binary payload, we mark it as a message
@@ -94,7 +98,12 @@ impl Transport for WebsocketTransport {
         }
     }
 
-    fn name(&self) -> &str {
-        "websocket"
+    fn base_url(&self) -> Result<String> {
+        Ok(self.base_url.read()?.clone())
+    }
+
+    fn set_base_url(&self, url: String) -> Result<()> {
+        *self.base_url.write()? = url;
+        Ok(())
     }
 }

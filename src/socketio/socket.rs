@@ -61,6 +61,7 @@ pub struct SocketIOSocket {
 impl SocketIOSocket {
     /// Creates an instance of `SocketIOSocket`.
     pub fn new(
+        host_address: String,
         nsp: Option<String>,
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
@@ -72,6 +73,7 @@ impl SocketIOSocket {
         callbacks.insert(Event::Message, Vec::new());
         SocketIOSocket {
             engine_socket: Arc::new(RwLock::new(EngineIOSocket::new(
+                host_address,
                 Some("socket.io".to_owned()),
                 tls_config,
                 opening_headers,
@@ -535,7 +537,7 @@ impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
 impl Client for SocketIOSocket {
     /// Connects to the server. This includes a connection of the underlying
     /// engine.io client and afterwards an opening socket.io request.
-    fn connect<T: Into<String>>(&mut self, address: T) -> Result<()> {
+    fn connect(&mut self) -> Result<()> {
         self.setup_callbacks()?;
 
         if self.connected.load(Ordering::Acquire) {
@@ -544,7 +546,7 @@ impl Client for SocketIOSocket {
 
         let mut engine_socket = self.engine_socket.write()?;
 
-        engine_socket.connect(address.into())?;
+        engine_socket.connect()?;
 
         drop(engine_socket);
 
@@ -667,7 +669,7 @@ mod test {
     fn it_works() {
         let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
-        let mut socket = SocketIOSocket::new(None, None, None);
+        let mut socket = SocketIOSocket::new(url, None, None, None);
 
         assert!(socket
             .on(
@@ -686,7 +688,7 @@ mod test {
 
         assert!(socket.on("Close".into(), Box::new(|_, _| {})).is_ok());
 
-        socket.connect(url).unwrap();
+        socket.connect().unwrap();
 
         let ack_callback = |message: Payload, _| {
             println!("Yehaa! My ack got acked?");
@@ -708,7 +710,8 @@ mod test {
 
     #[test]
     fn test_error_cases() {
-        let sut = SocketIOSocket::new(None, None, None);
+        let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+        let sut = SocketIOSocket::new(url, None, None, None);
 
         let packet = SocketPacket::new(
             SocketPacketId::Connect,
