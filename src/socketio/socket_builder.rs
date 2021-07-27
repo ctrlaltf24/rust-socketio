@@ -188,7 +188,7 @@ impl SocketBuilder {
         let mut socket = Socket::new(self.nsp, self.tls_config, self.opening_headers);
         if let Some(callbacks) = self.on {
             for (event, callback) in callbacks {
-                socket.on(event.into(), Box::new(callback)).unwrap();
+                socket.on(event, Box::new(callback)).unwrap();
             }
         }
         socket.connect(self.address)?;

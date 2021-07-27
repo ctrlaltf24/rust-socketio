@@ -319,7 +319,7 @@ impl Client for EngineIOSocket {
                 *connection_data = Some(conn_data);
                 drop(connection_data);
 
-                self.callback(Event::Open, "");
+                self.callback(Event::Open, "")?;
 
                 // set the last ping to now and set the connected state
                 *self.last_ping.lock()? = Instant::now();
@@ -405,16 +405,16 @@ impl EngineClient for EngineIOSocket {
             }
 
             for packet in packets.unwrap() {
-                self.callback(Event::Packet, packet.clone().encode());
+                self.callback(Event::Packet, packet.clone().encode())?;
 
                 // check for the appropriate action or callback
                 match packet.packet_id {
                     PacketId::Message => {
-                        self.callback(Event::Data, packet.clone().encode());
+                        self.callback(Event::Data, packet.clone().encode())?;
                     }
 
                     PacketId::Close => {
-                        self.callback(Event::Close, packet.clone().encode());
+                        self.callback(Event::Close, packet.clone().encode())?;
                         // set current state to not connected and stop polling
                         self.connected.store(false, Ordering::Release);
                     }
