@@ -57,20 +57,20 @@ impl Packet {
     /// Decodes a single `Packet` from an `u8` byte stream.
     pub(super) fn decode(bytes: Bytes) -> Result<Self> {
         if bytes.is_empty() {
-            return Err(Error::EmptyPacket);
+            return Err(Error::EmptyPacket());
         }
 
-        let is_base64 = *bytes.get(0).ok_or(Error::IncompletePacket)? == b'b';
+        let is_base64 = *bytes.get(0).ok_or(Error::IncompletePacket())? == b'b';
 
         // only 'messages' packets could be encoded
         let packet_id = if is_base64 {
             PacketId::Message
         } else {
-            u8_to_packet_id(*bytes.get(0).ok_or(Error::IncompletePacket)?)?
+            u8_to_packet_id(*bytes.get(0).ok_or(Error::IncompletePacket())?)?
         };
 
         if bytes.len() == 1 && packet_id == PacketId::Message {
-            return Err(Error::IncompletePacket);
+            return Err(Error::IncompletePacket());
         }
 
         let data: Bytes = bytes.slice(1..);
@@ -177,7 +177,7 @@ impl TryInto<HandshakePacket> for Packet {
         if let Ok(handshake) = serde_json::from_slice::<HandshakePacket>(self.data[..].as_ref()) {
             Ok(handshake)
         } else {
-            Err(Error::JsonError)
+            Err(Error::InvalidJson(format!("{:?}",self.data)))
         }
     }
 }

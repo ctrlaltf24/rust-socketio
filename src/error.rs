@@ -1,5 +1,6 @@
+use std::num::ParseIntError;
 use base64::DecodeError;
-use std::{num::ParseIntError, str};
+use std::{str};
 use thiserror::Error;
 use websocket::{client::ParseError, WebSocketError};
 
@@ -7,66 +8,57 @@ use websocket::{client::ParseError, WebSocketError};
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
+    // Conform to https://rust-lang.github.io/api-guidelines/naming.html#names-use-a-consistent-word-order-c-word-order
+    // Negative verb-object
     #[error("Invalid packet id: {0}")]
     InvalidPacketId(u8),
     #[error("Error while parsing an empty packet")]
-    EmptyPacket,
+    EmptyPacket(),
     #[error("Error while parsing an incomplete packet")]
-    IncompletePacket,
+    IncompletePacket(),
     #[error("Got an invalid packet which did not follow the protocol format")]
-    InvalidPacket,
+    InvalidPacket(),
     #[error("An error occurred while decoding the utf-8 text: {0}")]
-    Utf8Error(#[from] str::Utf8Error),
+    InvalidUtf8(#[from] str::Utf8Error),
     #[error("An error occurred while encoding/decoding base64: {0}")]
-    Base64Error(#[from] DecodeError),
-    #[error("An error occurred while encoding/decoding json")]
-    JsonError,
+    InvalidBase64(#[from] DecodeError),
     #[error("Invalid Url: {0}")]
     InvalidUrl(String),
     #[error("Error during connection via http: {0}")]
-    ReqwestError(#[from] reqwest::Error),
+    IncompleteReqwest(#[from] reqwest::Error),
     #[error("Network request returned with status code: {0}")]
-    HttpError(u16),
+    IncompleteHttp(u16),
     #[error("Got illegal handshake response: {0}")]
-    HandshakeError(String),
+    InvalidHandshake(String),
     #[error("Called an action before the connection was established")]
-    ActionBeforeOpen,
+    IllegalActionBeforeOpen(),
     #[error("string is not json serializable: {0}")]
     InvalidJson(String),
     #[error("Did not receive an ack for id: {0}")]
-    DidNotReceiveProperAck(i32),
+    MissingAck(i32),
     #[error("An illegal action (such as setting a callback after being connected) was triggered")]
-    IllegalActionAfterOpen,
+    IllegalActionAfterOpen(),
     #[error("Specified namespace {0} is not valid")]
     IllegalNamespace(String),
     #[error("A lock was poisoned")]
-    PoisonedLockError,
+    InvalidPoisonedLock(),
     #[error("Got a websocket error: {0}")]
-    FromWebsocketError(#[from] WebSocketError),
+    IncompleteWebsocket(#[from] WebSocketError),
     #[error("Error while parsing the url for the websocket connection: {0}")]
-    FromWebsocketParseError(#[from] ParseError),
+    InvalidWebsocketURL(#[from] ParseError),
     #[error("Got an IO-Error: {0}")]
-    FromIoError(#[from] std::io::Error),
-    #[error("No transports defined")]
-    NoTransport(),
-    #[error("That transport already exists")]
-    TransportExists(),
+    IcompleteIo(#[from] std::io::Error),
     #[error("The socket is closed")]
-    SocketClosed(),
+    IllegalActionAfterClose(),
+    #[error("Error while parsing an integer")]
+    InvalidInteger(#[from] ParseIntError)
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 impl<T> From<std::sync::PoisonError<T>> for Error {
     fn from(_: std::sync::PoisonError<T>) -> Self {
-        Self::PoisonedLockError
-    }
-}
-
-impl From<ParseIntError> for Error {
-    fn from(_: ParseIntError) -> Self {
-        // this is used for parsing integers from the a packet string
-        Self::InvalidPacket
+        Self::InvalidPoisonedLock()
     }
 }
 
@@ -87,9 +79,6 @@ mod tests {
     fn test_error_conversion() {
         let mutex = Mutex::new(0);
         let _poison_error = Error::from(PoisonError::new(mutex.lock()));
-        assert!(matches!(Error::PoisonedLockError, _poison_error));
-
-        let _parse_int_error = Error::from("no int".parse::<i32>().expect_err("unreachable"));
-        assert!(matches!(Error::InvalidPacket, _parse_int_error));
+        assert!(matches!(Error::InvalidPoisonedLock, _poison_error));
     }
 }

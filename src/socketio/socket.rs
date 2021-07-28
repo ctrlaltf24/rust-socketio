@@ -85,7 +85,7 @@ impl SocketIoSocket {
     /// Sends a `socket.io` packet to the server using the `engine.io` client.
     pub fn send(&self, packet: &SocketPacket) -> Result<()> {
         if !self.is_engineio_connected()? || !self.connected.load(Ordering::Acquire) {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
 
         // the packet, encoded as an engine.io message packet
@@ -100,7 +100,7 @@ impl SocketIoSocket {
     /// `attachments` field.
     fn send_binary_attachment(&self, attachment: Bytes) -> Result<()> {
         if !self.is_engineio_connected()? || !self.connected.load(Ordering::Acquire) {
-            return Err(Error::ActionBeforeOpen);
+            return Err(Error::IllegalActionBeforeOpen());
         }
 
         // the packet, encoded as an engine.io message packet
@@ -543,7 +543,7 @@ impl Client for SocketIoSocket {
         self.setup_callbacks()?;
 
         if self.connected.load(Ordering::Acquire) {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
 
         let mut engine_socket = self.engine_socket.write()?;
@@ -563,7 +563,7 @@ impl Client for SocketIoSocket {
             loop {
                 match s.poll_cycle() {
                     Ok(_) => break,
-                    e @ Err(Error::HttpError(_)) | e @ Err(Error::ReqwestError(_)) => {
+                    e @ Err(Error::IncompleteHttp(_)) | e @ Err(Error::IncompleteReqwest(_)) => {
                         panic!("{}", e.unwrap_err())
                     }
                     _ => (),
@@ -617,7 +617,7 @@ impl Client for SocketIoSocket {
     /// ```
     fn disconnect(&mut self) -> Result<()> {
         if !self.is_engineio_connected()? || !self.connected.load(Ordering::Acquire) {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
 
         let disconnect_packet = SocketPacket::new(

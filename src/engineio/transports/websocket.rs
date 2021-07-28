@@ -56,7 +56,7 @@ impl WebsocketTransport {
         // expect to receive a probe packet
         let message = receiver.recv_message()?;
         if message.take_payload() != Packet::new(PacketId::Pong, Bytes::from("probe")).encode() {
-            return Err(Error::HandshakeError("Error".to_owned()));
+            return Err(Error::InvalidPacket());
         }
 
         // finally send the upgrade request. the payload `5` stands for an upgrade

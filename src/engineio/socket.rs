@@ -76,7 +76,7 @@ impl EngineIoSocket {
     /// socketio binary attachment via the boolean attribute `is_binary_att`.
     pub fn emit(&self, packet: Packet, is_binary_att: bool) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
-            let error = Error::ActionBeforeOpen;
+            let error = Error::IllegalActionAfterOpen();
             self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
@@ -130,7 +130,7 @@ impl EngineIoSocket {
             let packets = decode_payload(data)?;
             Ok(Some(packets))
         } else {
-            Err(Error::SocketClosed())
+            Err(Error::IllegalActionAfterClose())
         }
     }
 
@@ -226,7 +226,7 @@ impl Client for EngineIoSocket {
 
             Ok(())
         } else {
-            let error = Error::HandshakeError("Empty response".to_owned());
+            let error = Error::InvalidHandshake("Empty response".to_owned());
             self.callback(Event::Error, format!("{}", error))?;
             Err(error)
         }
@@ -281,7 +281,7 @@ pub trait EngineClient {
 impl EngineClient for EngineIoSocket {
     fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
-            let error = Error::ActionBeforeOpen;
+            let error = Error::IllegalActionBeforeOpen();
             self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
@@ -513,7 +513,7 @@ mod test {
         let _error = sut
             .emit(Packet::new(PacketId::Close, Bytes::from_static(b"")), false)
             .expect_err("error");
-        assert!(matches!(Error::ActionBeforeOpen, _error));
+        assert!(matches!(Error::IllegalActionBeforeOpen(), _error));
 
         // test missing match arm in socket constructor
         let mut headers = HeaderMap::new();
