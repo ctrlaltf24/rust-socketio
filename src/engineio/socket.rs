@@ -63,39 +63,6 @@ impl EngineIOSocket {
         }
     }
 
-    /// This handles the upgrade from polling to websocket transport. Looking at the protocol
-    /// specs, this needs the following preconditions:
-    /// - the handshake must have already happened
-    /// - the handshake `upgrade` field needs to contain the value `websocket`.
-    /// If those preconditions are valid, it is save to call the method. The protocol then
-    /// requires the following procedure:
-    /// - the client starts to connect to the server via websocket, mentioning the related `sid` received
-    ///   in the handshake.
-    /// - to test out the connection, the client sends a `ping` packet with the payload `probe`.
-    /// - if the server receives this correctly, it responses by sending a `pong` packet with the payload `probe`.
-    /// - if the client receives that both sides can be sure that the upgrade is save and the client requests
-    ///   the final upgrade by sending another `update` packet over `websocket`.
-    /// If this procedure is alright, the new transport is established.
-    fn upgrade_connection(&mut self) -> Result<()> {
-        let tls_config = self.tls_config.read()?.clone();
-
-        let full_address = self.base_url.read()?.clone();
-        let base_url = websocket::url::Url::parse(&full_address.to_string()[..])?;
-        drop(full_address);
-
-        match base_url.scheme() {
-            "https" => {
-                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(base_url, tls_config, self.get_ws_headers()?));
-            }
-            "http" => {
-                *self.transport.write()? = Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
-            }
-            _ => return Err(Error::InvalidUrl(base_url.to_string())),
-        }
-
-        Ok(())
-    }
-
     /// Sends a packet to the server. This optionally handles sending of a
     /// socketio binary attachment via the boolean attribute `is_binary_att`.
     pub fn emit(&self, packet: Packet, is_binary_att: bool) -> Result<()> {
@@ -284,13 +251,28 @@ impl Debug for EngineIOSocket {
 
 /// EngineSocket related functions that use client side logic
 pub trait EngineClient {
-    fn poll_cycle(&self) -> Result<()>;
-}
-
-impl EngineClient for EngineIOSocket {
     /// Performs the server long polling procedure as long as the client is
     /// connected. This should run separately at all time to ensure proper
     /// response handling from the server.
+    fn poll_cycle(&self) -> Result<()>;
+
+    /// This handles the upgrade from polling to websocket transport. Looking at the protocol
+    /// specs, this needs the following preconditions:
+    /// - the handshake must have already happened
+    /// - the handshake `upgrade` field needs to contain the value `websocket`.
+    /// If those preconditions are valid, it is save to call the method. The protocol then
+    /// requires the following procedure:
+    /// - the client starts to connect to the server via websocket, mentioning the related `sid` received
+    ///   in the handshake.
+    /// - to test out the connection, the client sends a `ping` packet with the payload `probe`.
+    /// - if the server receives this correctly, it responses by sending a `pong` packet with the payload `probe`.
+    /// - if the client receives that both sides can be sure that the upgrade is save and the client requests
+    ///   the final upgrade by sending another `update` packet over `websocket`.
+    /// If this procedure is alright, the new transport is established.
+    fn upgrade_connection(&mut self) -> Result<()>;
+}
+
+impl EngineClient for EngineIOSocket {
     fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::ActionBeforeOpen;
@@ -360,6 +342,27 @@ impl EngineClient for EngineIOSocket {
         }
         Ok(())
     }
+
+    fn upgrade_connection(&mut self) -> Result<()> {
+        let tls_config = self.tls_config.read()?.clone();
+
+        let full_address = self.base_url.read()?.clone();
+        let base_url = websocket::url::Url::parse(&full_address.to_string()[..])?;
+        drop(full_address);
+
+        match base_url.scheme() {
+            "https" => {
+                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(base_url, tls_config, self.get_ws_headers()?));
+            }
+            "http" => {
+                *self.transport.write()? = Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
+            }
+            _ => return Err(Error::InvalidUrl(base_url.to_string())),
+        }
+
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]
