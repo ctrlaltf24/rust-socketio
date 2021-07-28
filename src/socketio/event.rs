@@ -1,5 +1,5 @@
 /// An `Event` in `socket.io` could either (`Message`, `Error`) or custom.
-#[derive(Debug, PartialEq, PartialOrd, Eq, Hash)]
+#[derive(Debug, PartialEq, PartialOrd, Eq, Hash, Clone)]
 pub enum Event {
     Message,
     Error,

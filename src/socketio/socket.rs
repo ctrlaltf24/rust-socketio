@@ -66,11 +66,6 @@ impl SocketIOSocket {
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
-        let mut callbacks = HashMap::new();
-        callbacks.insert(Event::Close, Vec::new());
-        callbacks.insert(Event::Connect, Vec::new());
-        callbacks.insert(Event::Error, Vec::new());
-        callbacks.insert(Event::Message, Vec::new());
         SocketIOSocket {
             engine_socket: Arc::new(RwLock::new(EngineIOSocket::new(
                 host_address,
@@ -83,7 +78,7 @@ impl SocketIOSocket {
             outstanding_acks: Arc::new(RwLock::new(Vec::new())),
             unfinished_packet: Arc::new(RwLock::new(None)),
             nsp: Arc::new(nsp),
-            callbacks: Arc::new(RwLock::new(callbacks)),
+            callbacks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -510,18 +505,21 @@ impl SocketIOSocket {
         self.engine_socket.read()?.is_connected()
     }
 }
-
+ 
 impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
     fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T) -> Result<()> {
         self.emit(event, Payload::Binary(bytes.into()))
     }
 
     fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
-        Arc::get_mut(&mut self.callbacks)
+        let mut hash = Arc::get_mut(&mut self.callbacks)
             .unwrap()
-            .write()?
-            .get_mut(&event).unwrap()
-            .push(callback);
+            .write()?;
+        if !hash.contains_key(&event) {
+            hash.insert(event.clone(), vec![]);
+        }
+        let vec = hash.get_mut(&event);
+        vec.unwrap().push(Box::new(callback));
         Ok(())
     }
 
@@ -529,7 +527,7 @@ impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
         let mut map = Arc::get_mut(&mut self.callbacks)
             .unwrap()
             .write()?;
-        map.insert(event,Vec::new()).unwrap();
+        map.insert(event, Vec::new()).unwrap();
         Ok(())
     }
 }

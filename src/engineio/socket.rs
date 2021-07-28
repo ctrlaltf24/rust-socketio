@@ -44,12 +44,6 @@ impl EngineIOSocket {
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
-        let mut callbacks = HashMap::new();
-        callbacks.insert(Event::Close, Vec::new());
-        callbacks.insert(Event::Data, Vec::new());
-        callbacks.insert(Event::Error, Vec::new());
-        callbacks.insert(Event::Open, Vec::new());
-        callbacks.insert(Event::Packet, Vec::new());
         let mut url = Url::parse(&(host_address+&root_path.unwrap_or_else(|| "/engine.io".to_owned()))[..]).unwrap();
         let base_url = url.query_pairs_mut().append_pair("EIO", "4").finish().clone();
         EngineIOSocket {
@@ -62,7 +56,7 @@ impl EngineIOSocket {
             last_ping: Arc::new(Mutex::new(Instant::now())),
             last_pong: Arc::new(Mutex::new(Instant::now())),
             connection_data: Arc::new(RwLock::new(None)),
-            callbacks: Arc::new(RwLock::new(callbacks)),
+            callbacks: Arc::new(RwLock::new(HashMap::new())),
             opening_headers: Arc::new(RwLock::new(opening_headers)),
             tls_config: Arc::new(RwLock::new(tls_config)),
             base_url: Arc::new(RwLock::new(base_url))
@@ -140,10 +134,12 @@ impl EngineIOSocket {
     #[inline]
     fn callback<T: Into<Bytes>>(&self, event: Event, payload: T) -> Result<()> {
         let callbacks = self.callbacks.read()?;
-        let functions = callbacks.get(&event).unwrap();
-        let bytes = payload.into();
-        for function in functions {
-            spawn_scoped!(function(bytes.clone()));
+        let functions = callbacks.get(&event);
+        if let Some(functions) = functions {
+            let bytes = payload.into();
+            for function in functions {
+                spawn_scoped!(function(bytes.clone()));
+            }
         }
         Ok(())
     }
@@ -179,11 +175,14 @@ impl EngineIOSocket {
     }
     pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()> where T: Fn(Bytes) + 'static + Sync + Send {
         // For some reason it doesn't resolve types correctly in a generic trait.
-        Arc::get_mut(&mut self.callbacks)
+        let mut hash = Arc::get_mut(&mut self.callbacks)
             .unwrap()
-            .write()?
-            .get_mut(&event).unwrap()
-            .push(Box::new(callback));
+            .write()?;
+        if !hash.contains_key(&event) {
+            hash.insert(event.clone(), vec![]);
+        }
+        let vec = hash.get_mut(&event);
+        vec.unwrap().push(Box::new(callback));
         Ok(())
     }
 }
@@ -194,12 +193,7 @@ impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
     }
 
     fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
-        Arc::get_mut(&mut self.callbacks)
-            .unwrap()
-            .write()?
-            .get_mut(&event).unwrap()
-            .push(callback);
-        Ok(())
+        self.on(event, callback)
     }
 
     fn off(&mut self, event: Event) -> Result<()> {

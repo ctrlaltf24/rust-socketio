@@ -1,4 +1,4 @@
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq, Clone)]
 pub enum Event {
     Close,
     Error,
