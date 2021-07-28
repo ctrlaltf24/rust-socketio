@@ -213,8 +213,6 @@ impl Client for EngineIOSocket {
             // set the last ping to now and set the connected state
             *self.last_ping.lock()? = Instant::now();
 
-            let _test = self.transport.is_poisoned();
-
             // emit a pong packet to keep trigger the ping cycle on the server
             self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
 
