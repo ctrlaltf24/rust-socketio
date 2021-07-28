@@ -120,7 +120,6 @@ mod test {
     use std::thread::sleep;
 
     use super::*;
-    #[cfg(feature = "client")]
     use crate::client::Client;
     use bytes::Bytes;
     use native_tls::TlsConnector;
@@ -131,7 +130,6 @@ mod test {
     use crate::event::EventEmitter;
 
     #[test]
-    #[cfg(feature = "client")]
     fn it_works() {
         let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
@@ -183,7 +181,6 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "client")]
     fn test_builder() {
         let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 

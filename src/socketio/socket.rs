@@ -1,14 +1,11 @@
 use crate::error::{Error, Result};
 use crate::socketio::packet::{Packet as SocketPacket, PacketId as SocketPacketId};
-#[cfg(feature = "client")]
 use crate::{
     client::Client,
-};
-use crate::{
     engineio::{
         event::Event as EngineEvent,
         packet::{Packet as EnginePacket, PacketId as EnginePacketId},
-        socket::{EngineIOSocket},
+        socket::{EngineClient, EngineIOSocket},
     },
     Socket,
 };
@@ -17,6 +14,7 @@ use native_tls::TlsConnector;
 use rand::{thread_rng, Rng};
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
+use std::thread;
 use std::{
     fmt::Debug,
     sync::{atomic::Ordering, RwLock},
@@ -538,7 +536,6 @@ impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
     }
 }
 
-#[cfg(feature = "client")]
 impl Client for SocketIOSocket {
     /// Connects to the server. This includes a connection of the underlying
     /// engine.io client and afterwards an opening socket.io request.
@@ -664,13 +661,13 @@ impl Debug for SocketIOSocket {
 
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
 
     use super::*;
     /// The socket.io server for testing runs on port 4200
     const SERVER_URL: &str = "http://localhost:4200";
 
     #[test]
-    #[cfg(feature = "client")]
     fn it_works() {
         let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 

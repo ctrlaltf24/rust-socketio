@@ -9,7 +9,6 @@ repository = "https://github.com/1c3t3a/rust-socketio"
 keywords = ["socketio", "engineio", "network", "protocol", "client"]
 categories = ["network-programming", "web-programming", "web-programming::websocket"]
 license = "MIT"
-features = ["client"]
 
 [dependencies]
 base64 = "0.13.0"
