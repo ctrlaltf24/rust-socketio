@@ -9,4 +9,4 @@ pub mod socket_builder;
 
 // For ease of access
 pub type SocketBuilder = socket_builder::SocketBuilder;
-pub type Socket = socket::SocketIOSocket;
+pub type Socket = socket::SocketIoSocket;

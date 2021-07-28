@@ -108,10 +108,10 @@ pub mod error;
 pub use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};
 pub use socketio::{event::Event, payload::Payload};
 
-use crate::socketio::socket::SocketIOSocket;
+use crate::socketio::socket::SocketIoSocket;
 
 // Compatibility
-pub type Socket = SocketIOSocket;
+pub type Socket = SocketIoSocket;
 pub type SocketBuilder = crate::socketio::SocketBuilder;
 
 #[cfg(test)]
