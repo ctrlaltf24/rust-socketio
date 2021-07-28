@@ -4,7 +4,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::char;
 use std::convert::TryFrom;
-use std::convert::TryInto;
 
 use crate::error::{Error, Result};
 /// Enumeration of the `engine.io` `Packet` types.
@@ -170,14 +169,12 @@ pub struct HandshakePacket {
     pub ping_timeout: u64,
 }
 
-impl TryInto<HandshakePacket> for Packet {
-    type Error = Error;
-    fn try_into(self) -> Result<HandshakePacket> {
-        // TODO: properly cast serde_json to JsonError
-        if let Ok(handshake) = serde_json::from_slice::<HandshakePacket>(self.data[..].as_ref()) {
-            Ok(handshake)
-        } else {
-            Err(Error::InvalidJson(format!("{:?}",self.data)))
+impl TryFrom<Packet> for HandshakePacket {
+    type Error = crate::error::Error;
+    fn try_from(packet: Packet) -> Result<Self> {
+        match serde_json::from_slice::<HandshakePacket>(packet.data[..].as_ref()) {
+            Ok(result) => Ok(result),
+            Err(serde_error) => Err(Error::from(serde_error))
         }
     }
 }
