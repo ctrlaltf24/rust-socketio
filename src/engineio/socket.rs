@@ -27,7 +27,7 @@ type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
 /// An `engine.io` socket which manages a connection with the server and allows
 /// it to register common callbacks.
 #[derive(Clone)]
-pub struct EngineIOSocket {
+pub struct EngineIoSocket {
     pub(super) transport: Arc<RwLock<Box<dyn Transport + Sync + Send>>>,
     pub connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
@@ -39,8 +39,8 @@ pub struct EngineIOSocket {
     tls_config: Arc<RwLock<Option<TlsConnector>>>,
 }
 
-impl EngineIOSocket {
-    /// Creates an instance of `EngineIOSocket`.
+impl EngineIoSocket {
+    /// Creates an instance of `EngineIoSocket`.
     pub fn new(
         host_address: String,
         root_path: Option<String>,
@@ -55,7 +55,7 @@ impl EngineIOSocket {
             .append_pair("EIO", "4")
             .finish()
             .clone();
-        EngineIOSocket {
+        EngineIoSocket {
             transport: Arc::new(RwLock::new(Box::new(PollingTransport::new(
                 base_url.clone(),
                 tls_config.clone(),
@@ -160,7 +160,7 @@ impl EngineIOSocket {
     }
 }
 
-impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
+impl EventEmitter<PacketId, Event, Callback> for EngineIoSocket {
     fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T) -> Result<()> {
         self.emit(Packet::new(event, bytes.into()), false)
     }
@@ -176,7 +176,7 @@ impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
     }
 }
 
-impl Client for EngineIOSocket {
+impl Client for EngineIoSocket {
     /// Opens the connection to a specified server. Includes an opening `GET`
     /// request to the server, the server passes back the handshake data in the
     /// response. If the handshake data mentions a websocket upgrade possibility,
@@ -241,9 +241,9 @@ impl Client for EngineIOSocket {
     }
 }
 
-impl Debug for EngineIOSocket {
+impl Debug for EngineIoSocket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("EngineIOSocket(connected: {:?}, connection_data: {:?}, base_url: {:?}, last_ping: {:?}, last_pong: {:?}, opening_headers: {:?}, tls_config: {:?}, transport: ?)",
+        f.write_fmt(format_args!("EngineIoSocket(connected: {:?}, connection_data: {:?}, base_url: {:?}, last_ping: {:?}, last_pong: {:?}, opening_headers: {:?}, tls_config: {:?}, transport: ?)",
             self.connected,
             self.connection_data,
             self.base_url,
@@ -278,7 +278,7 @@ pub trait EngineClient {
     fn upgrade_connection(&mut self) -> Result<()>;
 }
 
-impl EngineClient for EngineIOSocket {
+impl EngineClient for EngineIoSocket {
     fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::ActionBeforeOpen;
@@ -394,7 +394,7 @@ mod test {
     fn test_connection_polling_packets() -> Result<()> {
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
-        let mut socket = EngineIOSocket::new(url, None, None, None);
+        let mut socket = EngineIoSocket::new(url, None, None, None);
 
         socket.connect()?;
 
@@ -454,7 +454,7 @@ mod test {
             .unwrap_or_else(|_| SERVER_URL_SECURE.to_owned());
 
         let mut socket =
-            EngineIOSocket::new(url, None, Some(get_tls_connector().unwrap()), Some(headers));
+            EngineIoSocket::new(url, None, Some(get_tls_connector().unwrap()), Some(headers));
 
         socket.connect().unwrap();
 
@@ -492,7 +492,7 @@ mod test {
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
         let illegal_url = "this is illegal";
-        let mut sut = EngineIOSocket::new(illegal_url.to_owned(), None, None, None);
+        let mut sut = EngineIoSocket::new(illegal_url.to_owned(), None, None, None);
 
         let _error = sut.connect().expect_err("Error");
         assert!(matches!(
@@ -501,7 +501,7 @@ mod test {
         ));
 
         let invalid_protocol = "file:///tmp/foo";
-        let mut sut = EngineIOSocket::new(invalid_protocol.to_owned(), None, None, None);
+        let mut sut = EngineIoSocket::new(invalid_protocol.to_owned(), None, None, None);
 
         let _error = sut.connect().expect_err("Error");
         assert!(matches!(
@@ -509,7 +509,7 @@ mod test {
             _error
         ));
 
-        let sut = EngineIOSocket::new(url.clone(), None, None, None);
+        let sut = EngineIoSocket::new(url.clone(), None, None, None);
         let _error = sut
             .emit(Packet::new(PacketId::Close, Bytes::from_static(b"")), false)
             .expect_err("error");
@@ -521,7 +521,7 @@ mod test {
             std::env::var("ENGINE_IO_SECURE_HOST").unwrap_or_else(|_| "localhost".to_owned());
         headers.insert(HOST, host.parse().unwrap());
 
-        let _ = EngineIOSocket::new(
+        let _ = EngineIoSocket::new(
             url.clone(),
             None,
             Some(
@@ -533,13 +533,13 @@ mod test {
             None,
         );
 
-        let _ = EngineIOSocket::new(url, None, None, Some(headers));
+        let _ = EngineIoSocket::new(url, None, None, Some(headers));
     }
 
     #[test]
     fn test_illegal_actions() {
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
-        let sut = EngineIOSocket::new(url, None, None, None);
+        let sut = EngineIoSocket::new(url, None, None, None);
         assert!(sut.poll_cycle().is_err());
 
         assert!(sut
@@ -559,7 +559,7 @@ mod test {
     fn test_basic_connection() {
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
-        let mut socket = EngineIOSocket::new(url, None, None, None);
+        let mut socket = EngineIoSocket::new(url, None, None, None);
 
         assert!(socket
             .on(Event::Open, |_| {

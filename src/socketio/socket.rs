@@ -5,7 +5,7 @@ use crate::{
     engineio::{
         event::Event as EngineEvent,
         packet::{Packet as EnginePacket, PacketId as EnginePacketId},
-        socket::{EngineClient, EngineIOSocket},
+        socket::{EngineClient, EngineIoSocket},
     },
     Socket,
 };
@@ -46,7 +46,7 @@ pub struct Ack {
 /// Handles communication in the `socket.io` protocol.
 #[derive(Clone)]
 pub struct SocketIOSocket {
-    engine_socket: Arc<RwLock<EngineIOSocket>>,
+    engine_socket: Arc<RwLock<EngineIoSocket>>,
     connected: Arc<AtomicBool>,
     on: Arc<Vec<EventCallback>>,
     outstanding_acks: Arc<RwLock<Vec<Ack>>>,
@@ -67,7 +67,7 @@ impl SocketIOSocket {
         opening_headers: Option<HeaderMap>,
     ) -> Self {
         SocketIOSocket {
-            engine_socket: Arc::new(RwLock::new(EngineIOSocket::new(
+            engine_socket: Arc::new(RwLock::new(EngineIoSocket::new(
                 host_address,
                 Some("socket.io".to_owned()),
                 tls_config,
