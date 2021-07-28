@@ -182,6 +182,7 @@ impl Client for EngineIoSocket {
     /// response. If the handshake data mentions a websocket upgrade possibility,
     /// we try to upgrade the connection. Afterwards a first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
+    // Should this be the constructor for Socket? https://rust-lang.github.io/api-guidelines/predictability.html#constructors-are-static-inherent-methods-c-ctor
     fn connect(&mut self) -> Result<()> {
         let packets = self.poll()?;
 
