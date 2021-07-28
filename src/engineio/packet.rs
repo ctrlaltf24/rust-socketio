@@ -1,9 +1,9 @@
 extern crate base64;
-use std::convert::TryFrom;
 use base64::{decode, encode};
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::char;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 
 use crate::error::{Error, Result};
@@ -112,7 +112,9 @@ impl Packet {
 
 impl TryFrom<Bytes> for Packet {
     type Error = Error;
-    fn try_from(bytes: Bytes) -> std::result::Result<Self, <Self as std::convert::TryFrom<Bytes>>::Error> {
+    fn try_from(
+        bytes: Bytes,
+    ) -> std::result::Result<Self, <Self as std::convert::TryFrom<Bytes>>::Error> {
         Self::decode(bytes)
     }
 }
