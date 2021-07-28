@@ -25,9 +25,6 @@ pub struct Packet {
     pub data: Bytes,
 }
 
-// see https://en.wikipedia.org/wiki/Delimiter#ASCII_delimited_text
-const SEPARATOR: char = '\x1e';
-
 impl TryFrom<u8> for PacketId {
     type Error = Error;
     fn try_from(b: u8) -> Result<Self> {
@@ -125,38 +122,65 @@ impl From<Packet> for Bytes {
     }
 }
 
-/// Decodes a `payload` which in the `engine.io` context means a chain of normal
-/// packets separated by a certain SEPARATOR, in this case the delimiter `\x30`.
-pub fn decode_payload(payload: Bytes) -> Result<Vec<Packet>> {
-    let mut vec = Vec::new();
-    let mut last_index = 0;
-
-    for i in 0..payload.len() {
-        if *payload.get(i).unwrap() as char == SEPARATOR {
-            vec.push(Packet::decode(payload.slice(last_index..i))?);
-            last_index = i + 1;
-        }
-    }
-    // push the last packet as well
-    vec.push(Packet::decode(payload.slice(last_index..payload.len()))?);
-
-    Ok(vec)
+pub struct Payload {
+    packets: Vec<Packet>
 }
 
-/// Encodes a payload. Payload in the `engine.io` context means a chain of
-/// normal `packets` separated by a SEPARATOR, in this case the delimiter
-/// `\x30`.
-pub fn encode_payload(packets: Vec<Packet>) -> Bytes {
-    let mut buf = BytesMut::new();
-    for packet in packets {
-        // at the moment no base64 encoding is used
-        buf.extend(Packet::encode(packet));
-        buf.put_u8(SEPARATOR as u8);
-    }
+impl Payload {
+    // see https://en.wikipedia.org/wiki/Delimiter#ASCII_delimited_text
+    const SEPARATOR: char = '\x1e';
 
-    // remove the last separator
-    let _ = buf.split_off(buf.len() - 1);
-    buf.freeze()
+    pub fn new(packets: Vec<Packet>) -> Self {
+        Payload {
+            packets
+        }
+    }
+    
+    pub fn as_vec(&self) -> &Vec<Packet> {
+        &self.packets
+    }
+}
+
+impl TryFrom<Bytes> for Payload {
+    type Error = Error;
+    /// Decodes a `payload` which in the `engine.io` context means a chain of normal
+    /// packets separated by a certain SEPARATOR, in this case the delimiter `\x30`.
+    fn try_from(payload: Bytes) -> Result<Self> {
+        let mut vec = Vec::new();
+        let mut last_index = 0;
+
+        for i in 0..payload.len() {
+            if *payload.get(i).unwrap() as char == Self::SEPARATOR {
+                vec.push(Packet::decode(payload.slice(last_index..i))?);
+                last_index = i + 1;
+            }
+        }
+        // push the last packet as well
+        vec.push(Packet::decode(payload.slice(last_index..payload.len()))?);
+
+        Ok(Payload {
+            packets: vec
+        })
+    }
+}
+
+impl TryFrom<Payload> for Bytes {
+    type Error = Error;
+    /// Encodes a payload. Payload in the `engine.io` context means a chain of
+    /// normal `packets` separated by a SEPARATOR, in this case the delimiter
+    /// `\x30`.
+    fn try_from(packets: Payload) -> Result<Self> {
+        let mut buf = BytesMut::new();
+        for packet in packets.as_vec() {
+            // at the moment no base64 encoding is used
+            buf.extend(Packet::encode(packet.clone()));
+            buf.put_u8(Payload::SEPARATOR as u8);
+        }
+
+        // remove the last separator
+        let _ = buf.split_off(buf.len() - 1);
+        Ok(buf.freeze())
+    }
 }
 
 /// Data which gets exchanged in a handshake as defined by the server.
@@ -182,7 +206,8 @@ impl TryFrom<Packet> for HandshakePacket {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::convert::TryInto;
+use super::*;
 
     #[test]
     fn test_packet_error() {
@@ -218,32 +243,32 @@ mod tests {
     #[test]
     fn test_decode_payload() {
         let data = Bytes::from_static(b"1Hello\x1e1HelloWorld");
-        let packets = decode_payload(data).unwrap();
+        let packets = Payload::try_from(data).unwrap();
 
-        assert_eq!(packets[0].packet_id, PacketId::Close);
-        assert_eq!(packets[0].data, Bytes::from_static(b"Hello"));
-        assert_eq!(packets[1].packet_id, PacketId::Close);
-        assert_eq!(packets[1].data, Bytes::from_static(b"HelloWorld"));
+        assert_eq!(packets.as_vec()[0].packet_id, PacketId::Close);
+        assert_eq!(packets.as_vec()[0].data, Bytes::from_static(b"Hello"));
+        assert_eq!(packets.as_vec()[1].packet_id, PacketId::Close);
+        assert_eq!(packets.as_vec()[1].data, Bytes::from_static(b"HelloWorld"));
 
-        let data = "1Hello\x1e1HelloWorld".to_owned().into_bytes();
-        assert_eq!(encode_payload(packets), data);
+        let data: Bytes = Bytes::from_static(b"1Hello\x1e1HelloWorld");
+        assert_eq!(packets.try_into(), data);
     }
 
     #[test]
     fn test_binary_payload() {
         let data = Bytes::from_static(b"bSGVsbG8=\x1ebSGVsbG9Xb3JsZA==\x1ebSGVsbG8=");
-        let packets = decode_payload(data).unwrap();
+        let packets = Payload::try_from(data).unwrap();
 
-        assert!(packets.len() == 3);
-        assert_eq!(packets[0].packet_id, PacketId::Message);
-        assert_eq!(packets[0].data, Bytes::from_static(b"Hello"));
-        assert_eq!(packets[1].packet_id, PacketId::Message);
-        assert_eq!(packets[1].data, Bytes::from_static(b"HelloWorld"));
-        assert_eq!(packets[2].packet_id, PacketId::Message);
-        assert_eq!(packets[2].data, Bytes::from_static(b"Hello"));
+        assert!(packets.as_vec().len() == 3);
+        assert_eq!(packets.as_vec()[0].packet_id, PacketId::Message);
+        assert_eq!(packets.as_vec()[0].data, Bytes::from_static(b"Hello"));
+        assert_eq!(packets.as_vec()[1].packet_id, PacketId::Message);
+        assert_eq!(packets.as_vec()[1].data, Bytes::from_static(b"HelloWorld"));
+        assert_eq!(packets.as_vec()[2].packet_id, PacketId::Message);
+        assert_eq!(packets.as_vec()[2].data, Bytes::from_static(b"Hello"));
 
         let data = Bytes::from_static(b"4Hello\x1e4HelloWorld\x1e4Hello");
-        assert_eq!(encode_payload(packets), data);
+        assert_eq!(packets.try_into(), data);
     }
 
     #[test]

@@ -1,6 +1,7 @@
+use crate::engineio::packet::Payload;
 use super::event::Event;
 use crate::client::Client;
-use crate::engineio::packet::{decode_payload, encode_payload, HandshakePacket, Packet, PacketId};
+use crate::engineio::packet::{HandshakePacket, Packet, PacketId};
 use crate::engineio::transport::Transport;
 use crate::engineio::transports::{
     polling::PollingTransport, websocket::WebsocketTransport,
@@ -86,7 +87,7 @@ impl EngineIoSocket {
         let data = if is_binary_att {
             packet.data
         } else {
-            encode_payload(vec![packet])
+            Payload::new(vec![packet]).try_into()?
         };
 
         if let Err(error) = self.transport.read()?.emit(data, is_binary_att) {
@@ -117,7 +118,7 @@ impl EngineIoSocket {
     }
 
     /// Polls for next payload
-    pub(crate) fn poll(&self) -> Result<Option<Vec<Packet>>> {
+    pub(crate) fn poll(&self) -> Result<Option<Payload>> {
         if self.connected.load(Ordering::Acquire) {
             let transport = self.transport.read()?;
             let data = transport.poll()?;
@@ -127,8 +128,7 @@ impl EngineIoSocket {
                 return Ok(None);
             }
 
-            let packets = decode_payload(data)?;
-            Ok(Some(packets))
+            Ok(Some(data.try_into()?))
         } else {
             Err(Error::IllegalActionAfterClose())
         }
@@ -186,7 +186,7 @@ impl Client for EngineIoSocket {
         let packets = self.poll()?;
 
         if packets.is_some() {
-            let conn_data: HandshakePacket = packets.unwrap().get(0).unwrap().clone().try_into()?;
+            let conn_data: HandshakePacket = packets.unwrap().as_vec().get(0).unwrap().clone().try_into()?;
             self.connected.store(true, Ordering::Release);
 
             // check if we could upgrade to websockets
@@ -307,7 +307,7 @@ impl EngineClient for EngineIoSocket {
                 break;
             }
 
-            for packet in packets.unwrap() {
+            for packet in packets.unwrap().as_vec() {
                 self.callback(Event::Packet, packet.clone().encode())?;
 
                 // check for the appropriate action or callback
@@ -401,7 +401,7 @@ mod test {
         // Our testing server is set up to send hello client on startup
         {
             let expected = Packet::new(PacketId::Message, Bytes::from_static(b"hello client"));
-            let got = socket.poll()?.unwrap().get(0).unwrap().clone();
+            let got = socket.poll()?.unwrap().as_vec().get(0).unwrap().clone();
             assert_eq!(expected, got);
         }
 
@@ -412,14 +412,14 @@ mod test {
         // Our testing server is set up to respond to messages "respond" with "Roger Roger"
         {
             let expected = Packet::new(PacketId::Message, Bytes::from_static(b"Roger Roger"));
-            let got = socket.poll()?.unwrap().get(0).unwrap().clone();
+            let got = socket.poll()?.unwrap().as_vec().get(0).unwrap().clone();
             assert_eq!(expected, got);
         }
 
         // Wait for server to ping us
         {
             let expected = Packet::new(PacketId::Ping, Bytes::from_static(b""));
-            let got = socket.poll()?.unwrap().get(0).unwrap().clone();
+            let got = socket.poll()?.unwrap().as_vec().get(0).unwrap().clone();
             assert_eq!(expected, got);
         }
         // Respond with pong (normally done in poll_cycle)
