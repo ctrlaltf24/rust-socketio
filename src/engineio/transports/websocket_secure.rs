@@ -7,23 +7,28 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex, RwLock};
 use websocket::{
     client::sync::Client as WsClient,
+    client::Url,
     dataframe::Opcode,
     header::Headers,
     sync::stream::{TcpStream, TlsStream},
     ws::dataframe::DataFrame,
     ClientBuilder as WsClientBuilder, Message,
-    client::Url
 };
 
 pub(crate) struct WebsocketSecureTransport {
     client: Arc<Mutex<WsClient<TlsStream<TcpStream>>>>,
-    base_url: Arc<RwLock<String>>
+    base_url: Arc<RwLock<String>>,
 }
 
 impl WebsocketSecureTransport {
     /// Creates an instance of `TransportClient`.
     pub fn new(base_url: Url, tls_config: Option<TlsConnector>, headers: Headers) -> Self {
-        let url = base_url.clone().query_pairs_mut().append_pair("transport","websocket").finish().clone();
+        let url = base_url
+            .clone()
+            .query_pairs_mut()
+            .append_pair("transport", "websocket")
+            .finish()
+            .clone();
         let client = WsClientBuilder::new(base_url.to_string()[..].as_ref())
             .unwrap()
             .custom_headers(&headers)
@@ -34,7 +39,7 @@ impl WebsocketSecureTransport {
 
         WebsocketSecureTransport {
             client: Arc::new(Mutex::new(client)),
-            base_url: Arc::new(RwLock::new(url.to_string()))
+            base_url: Arc::new(RwLock::new(url.to_string())),
         }
     }
 

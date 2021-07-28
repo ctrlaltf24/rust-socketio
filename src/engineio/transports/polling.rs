@@ -1,22 +1,26 @@
 use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use native_tls::TlsConnector;
+use reqwest::Url;
 use reqwest::{
     blocking::{Client, ClientBuilder},
     header::HeaderMap,
 };
 use std::sync::{Arc, Mutex, RwLock};
-use reqwest::{Url};
 
 pub(crate) struct PollingTransport {
     client: Arc<Mutex<Client>>,
-    base_url: Arc<RwLock<String>>
+    base_url: Arc<RwLock<String>>,
 }
 
 impl PollingTransport {
-    /// Creates an instance of `TransportClient`. 
-    pub fn new(base_url: Url, tls_config: Option<TlsConnector>, opening_headers: Option<HeaderMap>) -> Self {
+    /// Creates an instance of `TransportClient`.
+    pub fn new(
+        base_url: Url,
+        tls_config: Option<TlsConnector>,
+        opening_headers: Option<HeaderMap>,
+    ) -> Self {
         let client = match (tls_config.clone(), opening_headers.clone()) {
             (Some(config), Some(map)) => ClientBuilder::new()
                 .use_preconfigured_tls(config)
@@ -31,7 +35,12 @@ impl PollingTransport {
             (None, None) => Client::new(),
         };
 
-        let url = base_url.clone().query_pairs_mut().append_pair("transport","polling").finish().clone();
+        let url = base_url
+            .clone()
+            .query_pairs_mut()
+            .append_pair("transport", "polling")
+            .finish()
+            .clone();
 
         PollingTransport {
             client: Arc::new(Mutex::new(client)),

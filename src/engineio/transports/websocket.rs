@@ -5,21 +5,25 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, RwLock};
 use websocket::{
-    dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream, sync::Writer,
-    ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
-    client::Url
+    client::Url, dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream,
+    sync::Writer, ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
 };
 
 pub(crate) struct WebsocketTransport {
     sender: Arc<Mutex<Writer<TcpStream>>>,
     receiver: Arc<Mutex<Reader<TcpStream>>>,
-    base_url: Arc<RwLock<String>>
+    base_url: Arc<RwLock<String>>,
 }
 
 impl WebsocketTransport {
     /// Creates an instance of `TransportClient`.
     pub fn new(base_url: Url, headers: Headers) -> Self {
-        let url = base_url.clone().query_pairs_mut().append_pair("transport","websocket").finish().clone();
+        let url = base_url
+            .clone()
+            .query_pairs_mut()
+            .append_pair("transport", "websocket")
+            .finish()
+            .clone();
         let client = WsClientBuilder::new(base_url[..].as_ref())
             .unwrap()
             .custom_headers(&headers)
@@ -33,7 +37,7 @@ impl WebsocketTransport {
         WebsocketTransport {
             sender: Arc::new(Mutex::new(sender)),
             receiver: Arc::new(Mutex::new(receiver)),
-            base_url: Arc::new(RwLock::new(url.to_string()))
+            base_url: Arc::new(RwLock::new(url.to_string())),
         }
     }
 

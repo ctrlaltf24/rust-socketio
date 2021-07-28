@@ -3,9 +3,9 @@ use crate::socketio::packet::{Packet as SocketPacket, PacketId as SocketPacketId
 use crate::{
     client::Client,
     engineio::{
+        event::Event as EngineEvent,
         packet::{Packet as EnginePacket, PacketId as EnginePacketId},
         socket::{EngineClient, EngineIOSocket},
-        event::Event as EngineEvent,
     },
     Socket,
 };
@@ -13,6 +13,7 @@ use bytes::Bytes;
 use native_tls::TlsConnector;
 use rand::{thread_rng, Rng};
 use reqwest::header::HeaderMap;
+use std::collections::HashMap;
 use std::thread;
 use std::{
     fmt::Debug,
@@ -22,7 +23,6 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
-use std::{collections::HashMap};
 
 use crate::event::EventEmitter;
 
@@ -418,16 +418,24 @@ impl SocketIOSocket {
             }
         };
 
-        self.engine_socket.write()?.on(EngineEvent::Open, open_callback)?;
+        self.engine_socket
+            .write()?
+            .on(EngineEvent::Open, open_callback)?;
 
-        self.engine_socket.write()?.on(EngineEvent::Error, error_callback)?;
+        self.engine_socket
+            .write()?
+            .on(EngineEvent::Error, error_callback)?;
 
-        self.engine_socket.write()?.on(EngineEvent::Close, close_callback)?;
+        self.engine_socket
+            .write()?
+            .on(EngineEvent::Close, close_callback)?;
 
         let clone_self = self.clone();
         self.engine_socket
             .write()?
-            .on(EngineEvent::Data, move |data| Self::handle_new_message(data, &clone_self))
+            .on(EngineEvent::Data, move |data| {
+                Self::handle_new_message(data, &clone_self)
+            })
     }
 
     /// Handles a binary event.
@@ -505,16 +513,14 @@ impl SocketIOSocket {
         self.engine_socket.read()?.is_connected()
     }
 }
- 
+
 impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
     fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T) -> Result<()> {
         self.emit(event, Payload::Binary(bytes.into()))
     }
 
     fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
-        let mut hash = Arc::get_mut(&mut self.callbacks)
-            .unwrap()
-            .write()?;
+        let mut hash = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
         if !hash.contains_key(&event) {
             hash.insert(event.clone(), vec![]);
         }
@@ -524,9 +530,7 @@ impl EventEmitter<Event, Event, Callback> for SocketIOSocket {
     }
 
     fn off(&mut self, event: Event) -> Result<()> {
-        let mut map = Arc::get_mut(&mut self.callbacks)
-            .unwrap()
-            .write()?;
+        let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
         map.insert(event, Vec::new()).unwrap();
         Ok(())
     }

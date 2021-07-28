@@ -1,8 +1,8 @@
-use std::io::Write;
-use std::io::Read;
-use crate::error::{Result};
-use bytes::{Bytes, Buf};
+use crate::error::Result;
 use adler32::adler32;
+use bytes::{Buf, Bytes};
+use std::io::Read;
+use std::io::Write;
 use std::time::SystemTime;
 
 pub trait Transport {

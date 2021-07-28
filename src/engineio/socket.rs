@@ -1,22 +1,25 @@
+use super::event::Event;
 use crate::client::Client;
 use crate::engineio::packet::{decode_payload, encode_payload, HandshakePacket, Packet, PacketId};
-pub use crate::event::{EventEmitter};
-use crate::engineio::transports::{polling::PollingTransport, websocket_secure::WebsocketSecureTransport, websocket::WebsocketTransport};
 use crate::engineio::transport::Transport;
+use crate::engineio::transports::{
+    polling::PollingTransport, websocket::WebsocketTransport,
+    websocket_secure::WebsocketSecureTransport,
+};
 use crate::error::{Error, Result};
-use super::event::Event;
+pub use crate::event::EventEmitter;
+use ::websocket::header::Headers;
 use bytes::Bytes;
 use native_tls::TlsConnector;
 use reqwest::{header::HeaderMap, Url};
+use std::collections::HashMap;
 use std::convert::TryInto;
-use std::{sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 use std::{
     fmt::Debug,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
-use std::{collections::HashMap};
-use ::websocket::header::Headers;
 
 /// Type of a `Callback` function. (Normal closures can be passed in here).
 type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
@@ -44,8 +47,14 @@ impl EngineIOSocket {
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
-        let mut url = Url::parse(&(host_address+&root_path.unwrap_or_else(|| "/engine.io".to_owned()))[..]).unwrap();
-        let base_url = url.query_pairs_mut().append_pair("EIO", "4").finish().clone();
+        let mut url =
+            Url::parse(&(host_address + &root_path.unwrap_or_else(|| "/engine.io".to_owned()))[..])
+                .unwrap();
+        let base_url = url
+            .query_pairs_mut()
+            .append_pair("EIO", "4")
+            .finish()
+            .clone();
         EngineIOSocket {
             transport: Arc::new(RwLock::new(Box::new(PollingTransport::new(
                 base_url.clone(),
@@ -59,7 +68,7 @@ impl EngineIOSocket {
             callbacks: Arc::new(RwLock::new(HashMap::new())),
             opening_headers: Arc::new(RwLock::new(opening_headers)),
             tls_config: Arc::new(RwLock::new(tls_config)),
-            base_url: Arc::new(RwLock::new(base_url))
+            base_url: Arc::new(RwLock::new(base_url)),
         }
     }
 
@@ -68,7 +77,7 @@ impl EngineIOSocket {
     pub fn emit(&self, packet: Packet, is_binary_att: bool) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::ActionBeforeOpen;
-            self.callback(Event::Error,format!("{}", error))?;
+            self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
 
@@ -80,12 +89,8 @@ impl EngineIOSocket {
             encode_payload(vec![packet])
         };
 
-        if let Err(error) = self
-            .transport
-            .read()?
-            .emit(data, is_binary_att)
-        {
-            self.callback(Event::Error,error.to_string())?;
+        if let Err(error) = self.transport.read()?.emit(data, is_binary_att) {
+            self.callback(Event::Error, error.to_string())?;
             return Err(error);
         }
 
@@ -140,11 +145,12 @@ impl EngineIOSocket {
         }
         Ok(headers)
     }
-    pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()> where T: Fn(Bytes) + 'static + Sync + Send {
+    pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()>
+    where
+        T: Fn(Bytes) + 'static + Sync + Send,
+    {
         // For some reason it doesn't resolve types correctly in a generic trait.
-        let mut hash = Arc::get_mut(&mut self.callbacks)
-            .unwrap()
-            .write()?;
+        let mut hash = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
         if !hash.contains_key(&event) {
             hash.insert(event.clone(), vec![]);
         }
@@ -164,10 +170,8 @@ impl EventEmitter<PacketId, Event, Callback> for EngineIOSocket {
     }
 
     fn off(&mut self, event: Event) -> Result<()> {
-        let mut map = Arc::get_mut(&mut self.callbacks)
-            .unwrap()
-            .write()?;
-        map.insert(event,Vec::new()).unwrap();
+        let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
+        map.insert(event, Vec::new()).unwrap();
         Ok(())
     }
 }
@@ -193,7 +197,11 @@ impl Client for EngineIOSocket {
 
             // update the base_url with the new sid
             let mut base_url = self.base_url.write()?;
-            let new_base_url = base_url.query_pairs_mut().append_pair("sid",&conn_data.sid[..]).finish().clone();
+            let new_base_url = base_url
+                .query_pairs_mut()
+                .append_pair("sid", &conn_data.sid[..])
+                .finish()
+                .clone();
             *base_url = new_base_url;
             drop(base_url);
 
@@ -219,7 +227,7 @@ impl Client for EngineIOSocket {
             Ok(())
         } else {
             let error = Error::HandshakeError("Empty response".to_owned());
-            self.callback(Event::Error,format!("{}", error))?;
+            self.callback(Event::Error, format!("{}", error))?;
             Err(error)
         }
     }
@@ -274,7 +282,7 @@ impl EngineClient for EngineIOSocket {
     fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::ActionBeforeOpen;
-            self.callback(Event::Error,format!("{}", error))?;
+            self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
 
@@ -350,17 +358,21 @@ impl EngineClient for EngineIOSocket {
 
         match base_url.scheme() {
             "https" => {
-                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(base_url, tls_config, self.get_ws_headers()?));
+                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(
+                    base_url,
+                    tls_config,
+                    self.get_ws_headers()?,
+                ));
             }
             "http" => {
-                *self.transport.write()? = Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
+                *self.transport.write()? =
+                    Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
             }
             _ => return Err(Error::InvalidUrl(base_url.to_string())),
         }
 
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -377,7 +389,7 @@ mod test {
     const SERVER_URL: &str = "http://localhost:4201";
     const SERVER_URL_SECURE: &str = "https://localhost:4202";
     const CERT_PATH: &str = "ci/cert/ca.crt";
-    
+
     #[test]
     fn test_connection_polling_packets() -> Result<()> {
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
@@ -393,7 +405,10 @@ mod test {
             assert_eq!(expected, got);
         }
 
-        socket.emit(Packet::new(PacketId::Message, Bytes::from_static(b"respond")), false)?;
+        socket.emit(
+            Packet::new(PacketId::Message, Bytes::from_static(b"respond")),
+            false,
+        )?;
         // Our testing server is set up to respond to messages "respond" with "Roger Roger"
         {
             let expected = Packet::new(PacketId::Message, Bytes::from_static(b"Roger Roger"));
@@ -413,7 +428,6 @@ mod test {
         socket.emit(Packet::new(PacketId::Close, Bytes::from_static(&[])), false)?;
 
         Ok(())
-
     }
 
     fn get_tls_connector() -> Result<TlsConnector> {
@@ -452,12 +466,15 @@ mod test {
             .is_ok());
 
         socket
-            .on(Event::Data, Box::new(|data: Bytes| {
-                println!(
-                    "Received: {:?}",
-                    std::str::from_utf8(&data).expect("Error while decoding utf-8")
-                );
-            }))
+            .on(
+                Event::Data,
+                Box::new(|data: Bytes| {
+                    println!(
+                        "Received: {:?}",
+                        std::str::from_utf8(&data).expect("Error while decoding utf-8")
+                    );
+                }),
+            )
             .unwrap();
 
         assert!(socket
@@ -541,7 +558,7 @@ mod test {
     #[test]
     fn test_basic_connection() {
         let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
-    
+
         let mut socket = EngineIOSocket::new(url, None, None, None);
 
         assert!(socket
