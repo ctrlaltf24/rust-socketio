@@ -1,12 +1,12 @@
-use std::num::ParseIntError;
 use base64::DecodeError;
+use reqwest::Error as ReqwestError;
+use serde_json::Error as JsonError;
+use std::io::Error as IoError;
+use std::num::ParseIntError;
 use std::str::Utf8Error;
 use thiserror::Error;
-use websocket::{client::ParseError, WebSocketError};
-use serde_json::Error as JsonError;
-use reqwest::Error as ReqwestError;
-use std::io::Error as IoError;
 use url::ParseError as UrlParseError;
+use websocket::{client::ParseError, WebSocketError};
 
 /// Enumeration of all possible errors in the `socket.io` context.
 #[derive(Error, Debug)]
@@ -57,7 +57,7 @@ pub enum Error {
     #[error("The socket is closed")]
     IllegalActionAfterClose(),
     #[error("Error while parsing an integer")]
-    InvalidInteger(#[from] ParseIntError)
+    InvalidInteger(#[from] ParseIntError),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

@@ -1,9 +1,7 @@
+#[cfg(feature = "client")]
+use crate::client::Client;
 use crate::error::{Error, Result};
 use crate::socketio::packet::{Packet as SocketPacket, PacketId as SocketPacketId};
-#[cfg(feature = "client")]
-use crate::{
-    client::Client,
-};
 use crate::{
     engineio::{
         event::Event as EngineEvent,
@@ -17,6 +15,8 @@ use native_tls::TlsConnector;
 use rand::{thread_rng, Rng};
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
+#[cfg(feature = "client")]
+use std::thread;
 use std::{
     fmt::Debug,
     sync::{atomic::Ordering, RwLock},
@@ -26,8 +26,6 @@ use std::{
     time::{Duration, Instant},
 };
 use url::Url;
-#[cfg(feature = "client")]
-use std::thread;
 
 use crate::event::EventEmitter;
 
@@ -741,7 +739,6 @@ mod test {
     #[test]
     #[cfg(feature = "client")]
     fn it_works_2() -> Result<()> {
-
         let url = crate::socketio::test::socket_io_server()?;
 
         let mut socket = Socket::new(url, None, None, None);

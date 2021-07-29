@@ -106,8 +106,8 @@ pub mod event;
 pub mod error;
 
 pub use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};
-pub use url::Url;
 pub use socketio::{event::Event, payload::Payload};
+pub use url::Url;
 
 use crate::socketio::socket::SocketIoSocket;
 

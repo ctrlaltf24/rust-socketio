@@ -123,7 +123,7 @@ impl From<Packet> for Bytes {
 }
 
 pub struct Payload {
-    packets: Vec<Packet>
+    packets: Vec<Packet>,
 }
 
 impl Payload {
@@ -131,11 +131,9 @@ impl Payload {
     const SEPARATOR: char = '\x1e';
 
     pub fn new(packets: Vec<Packet>) -> Self {
-        Payload {
-            packets
-        }
+        Payload { packets }
     }
-    
+
     pub fn as_vec(&self) -> &Vec<Packet> {
         &self.packets
     }
@@ -158,9 +156,7 @@ impl TryFrom<Bytes> for Payload {
         // push the last packet as well
         vec.push(Packet::decode(payload.slice(last_index..payload.len()))?);
 
-        Ok(Payload {
-            packets: vec
-        })
+        Ok(Payload { packets: vec })
     }
 }
 
@@ -199,15 +195,15 @@ impl TryFrom<Packet> for HandshakePacket {
     fn try_from(packet: Packet) -> Result<Self> {
         match serde_json::from_slice::<HandshakePacket>(packet.data[..].as_ref()) {
             Ok(result) => Ok(result),
-            Err(serde_error) => Err(Error::from(serde_error))
+            Err(serde_error) => Err(Error::from(serde_error)),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::convert::TryInto;
-use super::*;
 
     #[test]
     fn test_packet_error() {

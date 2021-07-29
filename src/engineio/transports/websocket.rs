@@ -4,11 +4,11 @@ use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, RwLock};
-use websocket::{
-    dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream,
-    sync::Writer, ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
-};
 use url::Url;
+use websocket::{
+    dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream, sync::Writer,
+    ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
+};
 
 pub(crate) struct WebsocketTransport {
     sender: Arc<Mutex<Writer<TcpStream>>>,

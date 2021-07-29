@@ -1,12 +1,14 @@
 use super::event::Event;
 #[cfg(feature = "client")]
+use super::transports::{
+    websocket::WebsocketTransport, websocket_secure::WebsocketSecureTransport,
+};
+#[cfg(feature = "client")]
 use crate::client::Client;
 use crate::engineio::packet::Payload;
 use crate::engineio::packet::{HandshakePacket, Packet, PacketId};
 use crate::engineio::transport::Transport;
-use crate::engineio::transports::{
-    polling::PollingTransport,
-};
+use crate::engineio::transports::polling::PollingTransport;
 use crate::error::{Error, Result};
 pub use crate::event::EventEmitter;
 use ::websocket::header::Headers;
@@ -14,18 +16,16 @@ use bytes::Bytes;
 use native_tls::TlsConnector;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::sync::atomic::Ordering;
+#[cfg(feature = "client")]
+use std::time::Duration;
 use std::{
     fmt::Debug,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
-    time::{Instant},
+    time::Instant,
 };
-use url::Url;   
-use std::convert::TryInto;
-#[cfg(feature = "client")]
-use std::time::Duration;
-#[cfg(feature = "client")]
-use super::transports::{websocket_secure::WebsocketSecureTransport, websocket::WebsocketTransport};
+use url::Url;
 
 /// Type of a `Callback` function. (Normal closures can be passed in here).
 type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
@@ -54,8 +54,7 @@ impl EngineIoSocket {
         opening_headers: Option<HeaderMap>,
     ) -> Self {
         let mut url = base_url.clone();
-        url
-            .path_segments_mut()
+        url.path_segments_mut()
             .unwrap()
             .push(&root_path.unwrap_or_else(|| "/engine.io".to_owned()));
         if url.query_pairs().any(|(k, _)| k == "EIO") {
@@ -399,7 +398,8 @@ mod test {
     #[test]
     #[cfg(feature = "client")]
     fn test_connection_polling_packets() -> Result<()> {
-        let mut socket = EngineIoSocket::new(crate::engineio::test::engine_io_server()?, None, None, None);
+        let mut socket =
+            EngineIoSocket::new(crate::engineio::test::engine_io_server()?, None, None, None);
 
         socket.connect()?;
 
@@ -446,8 +446,12 @@ mod test {
 
         let url = crate::engineio::test::engine_io_server_secure()?;
 
-        let mut socket =
-            EngineIoSocket::new(url, None, Some(crate::test::tls_connector().unwrap()), Some(headers));
+        let mut socket = EngineIoSocket::new(
+            url,
+            None,
+            Some(crate::test::tls_connector().unwrap()),
+            Some(headers),
+        );
 
         socket.connect().unwrap();
 
