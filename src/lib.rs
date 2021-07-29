@@ -106,6 +106,7 @@ pub mod event;
 pub mod error;
 
 pub use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};
+pub use url::Url;
 pub use socketio::{event::Event, payload::Payload};
 
 use crate::socketio::socket::SocketIoSocket;
@@ -115,69 +116,32 @@ pub type Socket = SocketIoSocket;
 pub type SocketBuilder = crate::socketio::SocketBuilder;
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
 
     use std::thread::sleep;
 
     use super::*;
-    use crate::client::Client;
     use bytes::Bytes;
     use native_tls::TlsConnector;
     use reqwest::header::{ACCEPT_ENCODING, HOST};
     use serde_json::json;
     use std::time::Duration;
     const SERVER_URL: &str = "http://localhost:4200";
-    use crate::event::EventEmitter;
+    const CERT_PATH: &str = "ci/cert/ca.crt";
+    use native_tls::Certificate;
+    use std::fs::File;
+    use std::io::Read;
 
-    #[test]
-    fn it_works() {
-        let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
-
-        let mut socket = Socket::new(url, None, None, None);
-
-        let result = socket.on(
-            "test".into(),
-            Box::new(|msg, _| match msg {
-                Payload::String(str) => println!("Received string: {}", str),
-                Payload::Binary(bin) => println!("Received binary data: {:#?}", bin),
-            }),
-        );
-        assert!(result.is_ok());
-
-        let result = socket.connect();
-        assert!(result.is_ok());
-
-        let payload = json!({"token": 123});
-        let result = socket.emit("test", Payload::String(payload.to_string()));
-
-        assert!(result.is_ok());
-
-        let ack_callback = move |message: Payload, socket_: Socket| {
-            let result = socket_.emit(
-                "test",
-                Payload::String(json!({"got ack": true}).to_string()),
-            );
-            assert!(result.is_ok());
-
-            println!("Yehaa! My ack got acked?");
-            if let Payload::String(str) = message {
-                println!("Received string Ack");
-                println!("Ack data: {}", str);
-            }
-        };
-
-        let ack = socket.emit_with_ack(
-            "test",
-            Payload::String(payload.to_string()),
-            Duration::from_secs(2),
-            ack_callback,
-        );
-        assert!(ack.is_ok());
-
-        socket.disconnect().unwrap();
-        // assert!(socket.disconnect().is_ok());
-
-        sleep(Duration::from_secs(20));
+    pub(crate) fn tls_connector() -> error::Result<TlsConnector> {
+        let cert_path = std::env::var("CA_CERT_PATH").unwrap_or_else(|_| CERT_PATH.to_owned());
+        let mut cert_file = File::open(cert_path)?;
+        let mut buf = vec![];
+        cert_file.read_to_end(&mut buf)?;
+        let cert: Certificate = Certificate::from_pem(&buf[..]).unwrap();
+        Ok(TlsConnector::builder()
+            .add_root_certificate(cert)
+            .build()
+            .unwrap())
     }
 
     #[test]

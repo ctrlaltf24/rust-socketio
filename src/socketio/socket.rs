@@ -23,6 +23,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
+use url::Url;
 
 use crate::event::EventEmitter;
 
@@ -61,7 +62,7 @@ pub struct SocketIoSocket {
 impl SocketIoSocket {
     /// Creates an instance of `SocketIoSocket`.
     pub fn new(
-        host_address: String,
+        host_address: Url,
         nsp: Option<String>,
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
@@ -662,12 +663,12 @@ mod test {
     use std::time::Duration;
 
     use super::*;
-    /// The socket.io server for testing runs on port 4200
-    const SERVER_URL: &str = "http://localhost:4200";
+    use serde_json::json;
+    use std::thread::sleep;
 
     #[test]
-    fn it_works() {
-        let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+    fn it_works() -> Result<()> {
+        let url = crate::socketio::test::socket_io_server()?;
 
         let mut socket = SocketIoSocket::new(url, None, None, None);
 
@@ -706,11 +707,12 @@ mod test {
                 ack_callback
             )
             .is_ok());
+        Ok(())
     }
 
     #[test]
-    fn test_error_cases() {
-        let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+    fn test_error_cases() -> Result<()> {
+        let url = crate::socketio::test::socket_io_server()?;
         let sut = SocketIoSocket::new(url, None, None, None);
 
         let packet = SocketPacket::new(
@@ -725,5 +727,61 @@ mod test {
         assert!(sut
             .send_binary_attachment(Bytes::from_static(b"Hallo"))
             .is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn it_works_2() -> Result<()> {
+
+        let url = crate::socketio::test::socket_io_server()?;
+
+        let mut socket = Socket::new(url, None, None, None);
+
+        let result = socket.on(
+            "test".into(),
+            Box::new(|msg, _| match msg {
+                Payload::String(str) => println!("Received string: {}", str),
+                Payload::Binary(bin) => println!("Received binary data: {:#?}", bin),
+            }),
+        );
+        assert!(result.is_ok());
+
+        let result = socket.connect();
+        assert!(result.is_ok());
+
+        let payload = json!({"token": 123});
+        let result = socket.emit("test", Payload::String(payload.to_string()));
+
+        assert!(result.is_ok());
+
+        let ack_callback = move |message: Payload, socket_: Socket| {
+            let result = socket_.emit(
+                "test",
+                Payload::String(json!({"got ack": true}).to_string()),
+            );
+            assert!(result.is_ok());
+
+            println!("Yehaa! My ack got acked?");
+            if let Payload::String(str) = message {
+                println!("Received string Ack");
+                println!("Ack data: {}", str);
+            }
+        };
+
+        let ack = socket.emit_with_ack(
+            "test",
+            Payload::String(payload.to_string()),
+            Duration::from_secs(2),
+            ack_callback,
+        );
+        assert!(ack.is_ok());
+
+        socket.disconnect().unwrap();
+        // assert!(socket.disconnect().is_ok());
+
+        sleep(Duration::from_secs(20));
+
+        Ok(())
     }
 }

@@ -5,9 +5,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 use native_tls::TlsConnector;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, RwLock};
+use url::Url;
 use websocket::{
     client::sync::Client as WsClient,
-    client::Url,
     dataframe::Opcode,
     header::Headers,
     sync::stream::{TcpStream, TlsStream},

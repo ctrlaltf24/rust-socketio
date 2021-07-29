@@ -5,9 +5,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, RwLock};
 use websocket::{
-    client::Url, dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream,
+    dataframe::Opcode, header::Headers, receiver::Reader, sync::stream::TcpStream,
     sync::Writer, ws::dataframe::DataFrame, ClientBuilder as WsClientBuilder, Message,
 };
+use url::Url;
 
 pub(crate) struct WebsocketTransport {
     sender: Arc<Mutex<Writer<TcpStream>>>,

@@ -2,7 +2,7 @@ use crate::engineio::transport::Transport;
 use crate::error::{Error, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use native_tls::TlsConnector;
-use reqwest::Url;
+use url::Url;
 use reqwest::{
     blocking::{Client, ClientBuilder},
     header::HeaderMap,

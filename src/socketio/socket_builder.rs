@@ -2,6 +2,7 @@ use super::{event::Event, payload::Payload, Socket};
 use crate::client::Client;
 use crate::error::{Error, Result};
 use crate::event::EventEmitter;
+use url::Url;
 use native_tls::TlsConnector;
 use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};
 
@@ -186,7 +187,7 @@ impl SocketBuilder {
     /// ```
     pub fn connect(self) -> Result<Socket> {
         let mut socket = Socket::new(
-            self.address,
+            Url::parse(&self.address)?,
             self.nsp,
             self.tls_config,
             self.opening_headers,

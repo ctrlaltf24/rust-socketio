@@ -1,6 +1,6 @@
-use crate::engineio::packet::Payload;
 use super::event::Event;
 use crate::client::Client;
+use crate::engineio::packet::Payload;
 use crate::engineio::packet::{HandshakePacket, Packet, PacketId};
 use crate::engineio::transport::Transport;
 use crate::engineio::transports::{
@@ -12,7 +12,7 @@ pub use crate::event::EventEmitter;
 use ::websocket::header::Headers;
 use bytes::Bytes;
 use native_tls::TlsConnector;
-use reqwest::{header::HeaderMap, Url};
+use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::atomic::Ordering;
@@ -21,6 +21,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
+use url::Url;
 
 /// Type of a `Callback` function. (Normal closures can be passed in here).
 type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
@@ -43,22 +44,22 @@ pub struct EngineIoSocket {
 impl EngineIoSocket {
     /// Creates an instance of `EngineIoSocket`.
     pub fn new(
-        host_address: String,
+        base_url: Url,
         root_path: Option<String>,
         tls_config: Option<TlsConnector>,
         opening_headers: Option<HeaderMap>,
     ) -> Self {
-        let mut url =
-            Url::parse(&(host_address + &root_path.unwrap_or_else(|| "/engine.io".to_owned()))[..])
-                .unwrap();
-        let base_url = url
-            .query_pairs_mut()
-            .append_pair("EIO", "4")
-            .finish()
-            .clone();
+        let mut url = base_url.clone();
+        url
+            .path_segments_mut()
+            .unwrap()
+            .push(&root_path.unwrap_or_else(|| "/engine.io".to_owned()));
+        if url.query_pairs().any(|(k, _)| k == "EIO") {
+            url.query_pairs_mut().append_pair("EIO", "4");
+        }
         EngineIoSocket {
             transport: Arc::new(RwLock::new(Box::new(PollingTransport::new(
-                base_url.clone(),
+                url.clone(),
                 tls_config.clone(),
                 opening_headers.clone(),
             )))),
@@ -69,7 +70,7 @@ impl EngineIoSocket {
             callbacks: Arc::new(RwLock::new(HashMap::new())),
             opening_headers: Arc::new(RwLock::new(opening_headers)),
             tls_config: Arc::new(RwLock::new(tls_config)),
-            base_url: Arc::new(RwLock::new(base_url)),
+            base_url: Arc::new(RwLock::new(url)),
         }
     }
 
@@ -186,7 +187,13 @@ impl Client for EngineIoSocket {
         let packets = self.poll()?;
 
         if packets.is_some() {
-            let conn_data: HandshakePacket = packets.unwrap().as_vec().get(0).unwrap().clone().try_into()?;
+            let conn_data: HandshakePacket = packets
+                .unwrap()
+                .as_vec()
+                .get(0)
+                .unwrap()
+                .clone()
+                .try_into()?;
             self.connected.store(true, Ordering::Release);
 
             // check if we could upgrade to websockets
@@ -353,7 +360,7 @@ impl EngineClient for EngineIoSocket {
         let tls_config = self.tls_config.read()?.clone();
 
         let full_address = self.base_url.read()?.clone();
-        let base_url = websocket::url::Url::parse(&full_address.to_string()[..])?;
+        let base_url = Url::parse(&full_address.to_string()[..])?;
         drop(full_address);
 
         match base_url.scheme() {
@@ -380,21 +387,12 @@ mod test {
     use reqwest::header::HOST;
 
     use crate::engineio::packet::{Packet, PacketId};
-    use native_tls::Certificate;
-    use std::fs::File;
-    use std::io::Read;
 
     use super::*;
-    /// The `engine.io` server for testing runs on port 4201
-    const SERVER_URL: &str = "http://localhost:4201";
-    const SERVER_URL_SECURE: &str = "https://localhost:4202";
-    const CERT_PATH: &str = "ci/cert/ca.crt";
 
     #[test]
     fn test_connection_polling_packets() -> Result<()> {
-        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
-
-        let mut socket = EngineIoSocket::new(url, None, None, None);
+        let mut socket = EngineIoSocket::new(crate::engineio::test::engine_io_server()?, None, None, None);
 
         socket.connect()?;
 
@@ -430,31 +428,18 @@ mod test {
         Ok(())
     }
 
-    fn get_tls_connector() -> Result<TlsConnector> {
-        let cert_path = std::env::var("CA_CERT_PATH").unwrap_or_else(|_| CERT_PATH.to_owned());
-        let mut cert_file = File::open(cert_path)?;
-        let mut buf = vec![];
-        cert_file.read_to_end(&mut buf)?;
-        let cert: Certificate = Certificate::from_pem(&buf[..]).unwrap();
-        Ok(TlsConnector::builder()
-            .add_root_certificate(cert)
-            .build()
-            .unwrap())
-    }
-
     #[test]
-    fn test_connection_secure_ws_http() {
+    fn test_connection_secure_ws_http() -> Result<()> {
         let host =
             std::env::var("ENGINE_IO_SECURE_HOST").unwrap_or_else(|_| "localhost".to_owned());
 
         let mut headers = HeaderMap::new();
         headers.insert(HOST, host.parse().unwrap());
 
-        let url = std::env::var("ENGINE_IO_SECURE_SERVER")
-            .unwrap_or_else(|_| SERVER_URL_SECURE.to_owned());
+        let url = crate::engineio::test::engine_io_server_secure()?;
 
         let mut socket =
-            EngineIoSocket::new(url, None, Some(get_tls_connector().unwrap()), Some(headers));
+            EngineIoSocket::new(url, None, Some(crate::test::tls_connector().unwrap()), Some(headers));
 
         socket.connect().unwrap();
 
@@ -485,14 +470,16 @@ mod test {
             .is_ok());
 
         assert!(socket.poll_cycle().is_ok());
+
+        Ok(())
     }
 
     #[test]
-    fn test_open_invariants() {
-        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+    fn test_open_invariants() -> Result<()> {
+        let url = crate::engineio::test::engine_io_server()?;
 
-        let illegal_url = "this is illegal";
-        let mut sut = EngineIoSocket::new(illegal_url.to_owned(), None, None, None);
+        let illegal_url = Url::parse("this is illegal")?;
+        let mut sut = EngineIoSocket::new(illegal_url, None, None, None);
 
         let _error = sut.connect().expect_err("Error");
         assert!(matches!(
@@ -500,8 +487,8 @@ mod test {
             _error
         ));
 
-        let invalid_protocol = "file:///tmp/foo";
-        let mut sut = EngineIoSocket::new(invalid_protocol.to_owned(), None, None, None);
+        let invalid_protocol = Url::parse("file:///tmp/foo")?;
+        let mut sut = EngineIoSocket::new(invalid_protocol, None, None, None);
 
         let _error = sut.connect().expect_err("Error");
         assert!(matches!(
@@ -534,11 +521,13 @@ mod test {
         );
 
         let _ = EngineIoSocket::new(url, None, None, Some(headers));
+
+        Ok(())
     }
 
     #[test]
-    fn test_illegal_actions() {
-        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+    fn test_illegal_actions() -> Result<()> {
+        let url = crate::engineio::test::engine_io_server()?;
         let sut = EngineIoSocket::new(url, None, None, None);
         assert!(sut.poll_cycle().is_err());
 
@@ -551,13 +540,14 @@ mod test {
                 true
             )
             .is_err());
+        Ok(())
     }
 
     use std::{thread::sleep, time::Duration};
 
     #[test]
-    fn test_basic_connection() {
-        let url = std::env::var("ENGINE_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
+    fn test_basic_connection() -> Result<()> {
+        let url = crate::engineio::test::engine_io_server()?;
 
         let mut socket = EngineIoSocket::new(url, None, None, None);
 
@@ -607,5 +597,7 @@ mod test {
                 false
             )
             .is_ok());
+
+        Ok(())
     }
 }
