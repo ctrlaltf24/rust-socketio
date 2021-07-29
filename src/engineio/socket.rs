@@ -1,11 +1,11 @@
 use super::event::Event;
+#[cfg(feature = "client")]
 use crate::client::Client;
 use crate::engineio::packet::Payload;
 use crate::engineio::packet::{HandshakePacket, Packet, PacketId};
 use crate::engineio::transport::Transport;
 use crate::engineio::transports::{
-    polling::PollingTransport, websocket::WebsocketTransport,
-    websocket_secure::WebsocketSecureTransport,
+    polling::PollingTransport,
 };
 use crate::error::{Error, Result};
 pub use crate::event::EventEmitter;
@@ -14,12 +14,11 @@ use bytes::Bytes;
 use native_tls::TlsConnector;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::sync::atomic::Ordering;
 use std::{
     fmt::Debug,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
-    time::{Duration, Instant},
+    time::{Instant},
 };
 use url::Url;
 
@@ -146,6 +145,120 @@ impl EngineIoSocket {
         }
         Ok(headers)
     }
+
+    /// Performs the server long polling procedure as long as the client is
+    /// connected. This should run separately at all time to ensure proper
+    /// response handling from the server.
+    #[cfg(feature = "client")]
+    fn poll_cycle(&self) -> Result<()> {
+        if !self.connected.load(Ordering::Acquire) {
+            let error = Error::ActionBeforeOpen;
+            self.callback(Event::Error, format!("{}", error))?;
+            return Err(error);
+        }
+
+        // as we don't have a mut self, the last_ping needs to be safed for later
+        let mut last_ping = *self.last_ping.lock()?;
+        // the time after we assume the server to be timed out
+        let server_timeout = Duration::from_millis(
+            (*self.connection_data)
+                .read()?
+                .as_ref()
+                .map_or_else(|| 0, |data| data.ping_timeout)
+                + (*self.connection_data)
+                    .read()?
+                    .as_ref()
+                    .map_or_else(|| 0, |data| data.ping_interval),
+        );
+
+        while self.connected.load(Ordering::Acquire) {
+            let packets = self.poll()?;
+
+            if packets.is_none() {
+                break;
+            }
+
+            for packet in packets.unwrap() {
+                self.callback(Event::Packet, packet.clone().encode())?;
+
+                // check for the appropriate action or callback
+                match packet.packet_id {
+                    PacketId::Message => {
+                        self.callback(Event::Data, packet.clone().encode())?;
+                    }
+
+                    PacketId::Close => {
+                        self.callback(Event::Close, packet.clone().encode())?;
+                        // set current state to not connected and stop polling
+                        self.connected.store(false, Ordering::Release);
+                    }
+                    PacketId::Open => {
+                        unreachable!("Won't happen as we open the connection beforehand");
+                    }
+                    PacketId::Upgrade => {
+                        // this is already checked during the handshake, so just do nothing here
+                    }
+                    PacketId::Ping => {
+                        last_ping = Instant::now();
+                        self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
+                    }
+                    PacketId::Pong => {
+                        // this will never happen as the pong packet is
+                        // only sent by the client
+                        unreachable!();
+                    }
+                    PacketId::Noop => (),
+                }
+            }
+
+            if server_timeout < last_ping.elapsed() {
+                // the server is unreachable
+                // set current state to not connected and stop polling
+                self.connected.store(false, Ordering::Release);
+            }
+        }
+        Ok(())
+    }
+
+    /// This handles the upgrade from polling to websocket transport. Looking at the protocol
+    /// specs, this needs the following preconditions:
+    /// - the handshake must have already happened
+    /// - the handshake `upgrade` field needs to contain the value `websocket`.
+    /// If those preconditions are valid, it is save to call the method. The protocol then
+    /// requires the following procedure:
+    /// - the client starts to connect to the server via websocket, mentioning the related `sid` received
+    ///   in the handshake.
+    /// - to test out the connection, the client sends a `ping` packet with the payload `probe`.
+    /// - if the server receives this correctly, it responses by sending a `pong` packet with the payload `probe`.
+    /// - if the client receives that both sides can be sure that the upgrade is save and the client requests
+    ///   the final upgrade by sending another `update` packet over `websocket`.
+    /// If this procedure is alright, the new transport is established.
+    #[cfg(feature = "client")]
+    fn upgrade_connection(&mut self) -> Result<()> {
+        let tls_config = self.tls_config.read()?.clone();
+
+        let full_address = self.base_url.read()?.clone();
+        let base_url = websocket::url::Url::parse(&full_address.to_string()[..])?;
+        drop(full_address);
+
+        match base_url.scheme() {
+            "https" => {
+                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(
+                    base_url,
+                    tls_config,
+                    self.get_ws_headers()?,
+                ));
+            }
+            "http" => {
+                *self.transport.write()? =
+                    Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
+            }
+            _ => return Err(Error::InvalidUrl(base_url.to_string())),
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()>
     where
         T: Fn(Bytes) + 'static + Sync + Send,
@@ -177,12 +290,14 @@ impl EventEmitter<PacketId, Event, Callback> for EngineIoSocket {
     }
 }
 
+#[cfg(feature = "client")]
 impl Client for EngineIoSocket {
     /// Opens the connection to a specified server. Includes an opening `GET`
     /// request to the server, the server passes back the handshake data in the
     /// response. If the handshake data mentions a websocket upgrade possibility,
     /// we try to upgrade the connection. Afterwards a first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
+    #[cfg(feature = "client")]
     fn connect(&mut self) -> Result<()> {
         let packets = self.poll()?;
 
@@ -262,135 +377,18 @@ impl Debug for EngineIoSocket {
     }
 }
 
-/// EngineSocket related functions that use client side logic
-pub trait EngineClient {
-    /// Performs the server long polling procedure as long as the client is
-    /// connected. This should run separately at all time to ensure proper
-    /// response handling from the server.
-    fn poll_cycle(&self) -> Result<()>;
-
-    /// This handles the upgrade from polling to websocket transport. Looking at the protocol
-    /// specs, this needs the following preconditions:
-    /// - the handshake must have already happened
-    /// - the handshake `upgrade` field needs to contain the value `websocket`.
-    /// If those preconditions are valid, it is save to call the method. The protocol then
-    /// requires the following procedure:
-    /// - the client starts to connect to the server via websocket, mentioning the related `sid` received
-    ///   in the handshake.
-    /// - to test out the connection, the client sends a `ping` packet with the payload `probe`.
-    /// - if the server receives this correctly, it responses by sending a `pong` packet with the payload `probe`.
-    /// - if the client receives that both sides can be sure that the upgrade is save and the client requests
-    ///   the final upgrade by sending another `update` packet over `websocket`.
-    /// If this procedure is alright, the new transport is established.
-    fn upgrade_connection(&mut self) -> Result<()>;
-}
-
-impl EngineClient for EngineIoSocket {
-    fn poll_cycle(&self) -> Result<()> {
-        if !self.connected.load(Ordering::Acquire) {
-            let error = Error::IllegalActionBeforeOpen();
-            self.callback(Event::Error, format!("{}", error))?;
-            return Err(error);
-        }
-
-        // as we don't have a mut self, the last_ping needs to be safed for later
-        let mut last_ping = *self.last_ping.lock()?;
-        // the time after we assume the server to be timed out
-        let server_timeout = Duration::from_millis(
-            (*self.connection_data)
-                .read()?
-                .as_ref()
-                .map_or_else(|| 0, |data| data.ping_timeout)
-                + (*self.connection_data)
-                    .read()?
-                    .as_ref()
-                    .map_or_else(|| 0, |data| data.ping_interval),
-        );
-
-        while self.connected.load(Ordering::Acquire) {
-            let packets = self.poll()?;
-
-            if packets.is_none() {
-                break;
-            }
-
-            for packet in packets.unwrap().as_vec() {
-                self.callback(Event::Packet, packet.clone().encode())?;
-
-                // check for the appropriate action or callback
-                match packet.packet_id {
-                    PacketId::Message => {
-                        self.callback(Event::Data, packet.clone().encode())?;
-                    }
-
-                    PacketId::Close => {
-                        self.callback(Event::Close, packet.clone().encode())?;
-                        // set current state to not connected and stop polling
-                        self.connected.store(false, Ordering::Release);
-                    }
-                    PacketId::Open => {
-                        unreachable!("Won't happen as we open the connection beforehand");
-                    }
-                    PacketId::Upgrade => {
-                        // this is already checked during the handshake, so just do nothing here
-                    }
-                    PacketId::Ping => {
-                        last_ping = Instant::now();
-                        self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
-                    }
-                    PacketId::Pong => {
-                        // this will never happen as the pong packet is
-                        // only sent by the client
-                        unreachable!();
-                    }
-                    PacketId::Noop => (),
-                }
-            }
-
-            if server_timeout < last_ping.elapsed() {
-                // the server is unreachable
-                // set current state to not connected and stop polling
-                self.connected.store(false, Ordering::Release);
-            }
-        }
-        Ok(())
-    }
-
-    fn upgrade_connection(&mut self) -> Result<()> {
-        let tls_config = self.tls_config.read()?.clone();
-
-        let full_address = self.base_url.read()?.clone();
-        let base_url = Url::parse(&full_address.to_string()[..])?;
-        drop(full_address);
-
-        match base_url.scheme() {
-            "https" => {
-                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(
-                    base_url,
-                    tls_config,
-                    self.get_ws_headers()?,
-                ));
-            }
-            "http" => {
-                *self.transport.write()? =
-                    Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
-            }
-            _ => return Err(Error::InvalidUrl(base_url.to_string())),
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use reqwest::header::HOST;
 
     use crate::engineio::packet::{Packet, PacketId};
+    use native_tls::Certificate;
+    use std::fs::File;
+    use std::io::Read;
 
     use super::*;
 
     #[test]
+    #[cfg(feature = "client")]
     fn test_connection_polling_packets() -> Result<()> {
         let mut socket = EngineIoSocket::new(crate::engineio::test::engine_io_server()?, None, None, None);
 
@@ -429,6 +427,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "client")]
     fn test_connection_secure_ws_http() -> Result<()> {
         let host =
             std::env::var("ENGINE_IO_SECURE_HOST").unwrap_or_else(|_| "localhost".to_owned());
@@ -475,6 +474,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "client")]
     fn test_open_invariants() -> Result<()> {
         let url = crate::engineio::test::engine_io_server()?;
 
@@ -526,6 +526,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "client")]
     fn test_illegal_actions() -> Result<()> {
         let url = crate::engineio::test::engine_io_server()?;
         let sut = EngineIoSocket::new(url, None, None, None);
@@ -543,9 +544,8 @@ mod test {
         Ok(())
     }
 
-    use std::{thread::sleep, time::Duration};
-
     #[test]
+    #[cfg(feature = "client")]
     fn test_basic_connection() -> Result<()> {
         let url = crate::engineio::test::engine_io_server()?;
 

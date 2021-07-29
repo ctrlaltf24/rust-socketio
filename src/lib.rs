@@ -145,6 +145,7 @@ pub(crate) mod test {
     }
 
     #[test]
+    #[cfg(feature = "client")]
     fn test_builder() {
         let url = std::env::var("SOCKET_IO_SERVER").unwrap_or_else(|_| SERVER_URL.to_owned());
 
