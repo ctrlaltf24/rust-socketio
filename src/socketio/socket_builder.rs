@@ -2,7 +2,9 @@ use super::{event::Event, payload::Payload, Socket};
 #[cfg(feature = "client")]
 use crate::client::Client;
 use crate::error::{Error, Result};
+#[cfg(feature = "client")]
 use crate::event::EventEmitter;
+#[cfg(feature = "client")]
 use url::Url;
 use native_tls::TlsConnector;
 use reqwest::header::{HeaderMap, HeaderValue, IntoHeaderName};

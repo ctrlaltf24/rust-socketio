@@ -8,7 +8,7 @@ use crate::{
     engineio::{
         event::Event as EngineEvent,
         packet::{Packet as EnginePacket, PacketId as EnginePacketId},
-        socket::{EngineClient, EngineIoSocket},
+        socket::EngineIoSocket,
     },
     Socket,
 };
@@ -26,6 +26,8 @@ use std::{
     time::{Duration, Instant},
 };
 use url::Url;
+#[cfg(feature = "client")]
+use std::thread;
 
 use crate::event::EventEmitter;
 
@@ -665,7 +667,9 @@ impl Debug for SocketIoSocket {
 mod test {
 
     use super::*;
+    #[cfg(feature = "client")]
     use serde_json::json;
+    #[cfg(feature = "client")]
     use std::thread::sleep;
 
     #[test]

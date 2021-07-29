@@ -20,7 +20,12 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     time::{Instant},
 };
-use url::Url;
+use url::Url;   
+use std::convert::TryInto;
+#[cfg(feature = "client")]
+use std::time::Duration;
+#[cfg(feature = "client")]
+use super::transports::{websocket_secure::WebsocketSecureTransport, websocket::WebsocketTransport};
 
 /// Type of a `Callback` function. (Normal closures can be passed in here).
 type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
@@ -150,9 +155,9 @@ impl EngineIoSocket {
     /// connected. This should run separately at all time to ensure proper
     /// response handling from the server.
     #[cfg(feature = "client")]
-    fn poll_cycle(&self) -> Result<()> {
+    pub(crate) fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
-            let error = Error::ActionBeforeOpen;
+            let error = Error::IllegalActionBeforeOpen();
             self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
@@ -178,7 +183,7 @@ impl EngineIoSocket {
                 break;
             }
 
-            for packet in packets.unwrap() {
+            for packet in packets.unwrap().as_vec() {
                 self.callback(Event::Packet, packet.clone().encode())?;
 
                 // check for the appropriate action or callback
@@ -238,7 +243,7 @@ impl EngineIoSocket {
         let tls_config = self.tls_config.read()?.clone();
 
         let full_address = self.base_url.read()?.clone();
-        let base_url = websocket::url::Url::parse(&full_address.to_string()[..])?;
+        let base_url = Url::parse(&full_address.to_string()[..])?;
         drop(full_address);
 
         match base_url.scheme() {
@@ -380,12 +385,16 @@ impl Debug for EngineIoSocket {
 #[cfg(test)]
 mod test {
 
+    #[cfg(feature = "client")]
     use crate::engineio::packet::{Packet, PacketId};
-    use native_tls::Certificate;
-    use std::fs::File;
-    use std::io::Read;
 
+    #[cfg(feature = "client")]
     use super::*;
+
+    #[cfg(feature = "client")]
+    use reqwest::header::HOST;
+    #[cfg(feature = "client")]
+    use std::thread::sleep;
 
     #[test]
     #[cfg(feature = "client")]
