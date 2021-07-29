@@ -183,16 +183,16 @@ impl EngineIoSocket {
             }
 
             for packet in packets.unwrap().as_vec() {
-                self.callback(Event::Packet, packet.clone().encode())?;
+                self.callback(Event::Packet, packet.clone())?;
 
                 // check for the appropriate action or callback
                 match packet.packet_id {
                     PacketId::Message => {
-                        self.callback(Event::Data, packet.clone().encode())?;
+                        self.callback(Event::Data, packet.clone())?;
                     }
 
                     PacketId::Close => {
-                        self.callback(Event::Close, packet.clone().encode())?;
+                        self.callback(Event::Close, packet.clone())?;
                         // set current state to not connected and stop polling
                         self.connected.store(false, Ordering::Release);
                     }
@@ -212,6 +212,10 @@ impl EngineIoSocket {
                         unreachable!();
                     }
                     PacketId::Noop => (),
+                    PacketId::Base64 => {
+                        // Has no id, not possible to decode.
+                        unreachable!();
+                    }
                 }
             }
 

@@ -49,22 +49,20 @@ impl WebsocketTransport {
         // send the probe packet, the text `2probe` represents a ping packet with
         // the content `probe`
         sender.send_message(&Message::binary(Cow::Borrowed(
-            Packet::new(PacketId::Ping, Bytes::from("probe"))
-                .encode()
+            Bytes::from(Packet::new(PacketId::Ping, Bytes::from("probe")))
                 .as_ref(),
         )))?;
 
         // expect to receive a probe packet
         let message = receiver.recv_message()?;
-        if message.take_payload() != Packet::new(PacketId::Pong, Bytes::from("probe")).encode() {
+        if message.take_payload() != Bytes::from(Packet::new(PacketId::Pong, Bytes::from("probe"))) {
             return Err(Error::InvalidPacket());
         }
 
         // finally send the upgrade request. the payload `5` stands for an upgrade
         // packet without any payload
         sender.send_message(&Message::binary(Cow::Borrowed(
-            Packet::new(PacketId::Upgrade, Bytes::from(""))
-                .encode()
+            Bytes::from(Packet::new(PacketId::Upgrade, Bytes::from("")))
                 .as_ref(),
         )))?;
 
