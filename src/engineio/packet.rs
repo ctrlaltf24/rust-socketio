@@ -55,10 +55,7 @@ pub struct Packet {
 impl Packet {
     /// Creates a new `Packet`.
     pub fn new(packet_id: PacketId, data: Bytes) -> Self {
-        Packet {
-            packet_id,
-            data,
-        }
+        Packet { packet_id, data }
     }
 }
 

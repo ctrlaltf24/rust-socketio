@@ -178,14 +178,14 @@ pub(crate) mod test {
 
         #[cfg(feature = "callback")]
         {
-        let ack_cb = |payload, _| {
-            println!("Yehaa the ack got acked");
-            println!("With data: {:#?}", payload);
-        };
+            let ack_cb = |payload, _| {
+                println!("Yehaa the ack got acked");
+                println!("With data: {:#?}", payload);
+            };
 
-        assert!(socket
-            .emit_with_ack("binary", json!("pls ack"), Duration::from_secs(1), ack_cb,)
-            .is_ok());
+            assert!(socket
+                .emit_with_ack("binary", json!("pls ack"), Duration::from_secs(1), ack_cb,)
+                .is_ok());
         }
         sleep(Duration::from_secs(20));
     }

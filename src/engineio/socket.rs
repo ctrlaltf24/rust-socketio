@@ -189,7 +189,6 @@ impl EngineIoSocket {
             }
 
             for packet in packets.unwrap().as_vec() {
-
                 // check for the appropriate action or callback
                 match packet.packet_id {
                     PacketId::Message => {
