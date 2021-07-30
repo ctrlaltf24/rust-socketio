@@ -30,11 +30,13 @@ use url::Url;
 /// Type of a `Callback` function. (Normal closures can be passed in here).
 type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
 
+type DynamicTransport = Box<dyn Transport + Sync + Send>;
+
 /// An `engine.io` socket which manages a connection with the server and allows
 /// it to register common callbacks.
 #[derive(Clone)]
-pub struct EngineIoSocket {
-    pub(super) transport: Arc<RwLock<Box<dyn Transport + Sync + Send>>>,
+pub struct EngineIoSocket<T = DynamicTransport> {
+    pub(super) transport: Arc<RwLock<T>>,
     pub connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
     last_pong: Arc<Mutex<Instant>>,
@@ -329,6 +331,7 @@ impl EngineIoSocket {
             // if we have an upgrade option, send the corresponding request, if this doesn't work
             // for some reason, proceed via polling
             if websocket_upgrade {
+                // TODO: No warnings if upgrade connection fails.
                 let _ = self.upgrade_connection();
             }
 
