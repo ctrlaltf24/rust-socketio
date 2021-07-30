@@ -3,7 +3,6 @@ use crate::error::{Error, Result};
 use crate::socketio::packet::{Packet as SocketPacket, PacketId as SocketPacketId};
 use crate::{
     engineio::{
-        event::Event as EngineEvent,
         packet::{Packet as EnginePacket, PacketId as EnginePacketId},
         socket::EngineIoSocket,
     },
@@ -275,7 +274,7 @@ impl SocketIoSocket {
     }
 
     /// Handles the incoming messages and classifies what callbacks to call and how.
-    /// This method is later registered as the callback for the `on_data` event of the
+    /// This method is later registered as the callback for the `on_message` event of the
     /// engineio client.
     #[inline]
     fn handle_new_message(socket_bytes: Bytes, clone_self: &SocketIoSocket) {
@@ -435,20 +434,20 @@ impl SocketIoSocket {
 
         self.engine_socket
             .write()?
-            .on(EngineEvent::Open, open_callback)?;
+            .on(EnginePacketId::Open, open_callback)?;
 
         self.engine_socket
             .write()?
-            .on(EngineEvent::Error, error_callback)?;
+            .on(EnginePacketId::Error, error_callback)?;
 
         self.engine_socket
             .write()?
-            .on(EngineEvent::Close, close_callback)?;
+            .on(EnginePacketId::Close, close_callback)?;
 
         let clone_self = self.clone();
         self.engine_socket
             .write()?
-            .on(EngineEvent::Data, move |data| {
+            .on(EnginePacketId::Message, move |data| {
                 Self::handle_new_message(data, &clone_self)
             })
     }

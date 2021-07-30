@@ -1,6 +1,3 @@
-
-#[cfg(feature = "callback")]
-use super::event::Event;
 #[cfg(feature = "client")]
 use super::transports::{
     websocket::WebsocketTransport, websocket_secure::WebsocketSecureTransport,
@@ -10,6 +7,7 @@ use crate::engineio::packet::{HandshakePacket, Packet, PacketId};
 use crate::engineio::transport::Transport;
 use crate::engineio::transports::polling::PollingTransport;
 use crate::error::{Error, Result};
+#[cfg(feature = "callback")]
 pub use crate::event::EventEmitter;
 use ::websocket::header::Headers;
 use bytes::Bytes;
@@ -43,7 +41,7 @@ pub struct EngineIoSocket {
     base_url: Arc<RwLock<Url>>,
     connection_data: Arc<RwLock<Option<HandshakePacket>>>,
     #[cfg(feature = "callback")]
-    callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
+    callbacks: Arc<RwLock<HashMap<PacketId, Vec<Callback>>>>,
     opening_headers: Arc<RwLock<Option<HeaderMap>>>,
     tls_config: Arc<RwLock<Option<TlsConnector>>>,
 }
@@ -87,7 +85,7 @@ impl EngineIoSocket {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::IllegalActionAfterOpen();
             #[cfg(feature = "callback")]
-            self.callback(Event::Error, format!("{}", error))?;
+            self.callback(PacketId::Error, format!("{}", error))?;
             return Err(error);
         }
 
@@ -101,7 +99,7 @@ impl EngineIoSocket {
 
         if let Err(error) = self.transport.read()?.emit(data, is_binary_att) {
             #[cfg(feature = "callback")]
-            self.callback(Event::Error, error.to_string())?;
+            self.callback(PacketId::Error, error.to_string())?;
             return Err(error);
         }
 
@@ -116,9 +114,9 @@ impl EngineIoSocket {
     /// Calls the error callback with a given message.
     #[inline]
     #[cfg(feature = "callback")]
-    fn callback<T: Into<Bytes>>(&self, event: Event, payload: T) -> Result<()> {
+    fn callback<T: Into<Bytes>>(&self, packet_id: PacketId, payload: T) -> Result<()> {
         let callbacks = self.callbacks.read()?;
-        let functions = callbacks.get(&event);
+        let functions = callbacks.get(&packet_id);
         if let Some(functions) = functions {
             let bytes = payload.into();
             for function in functions {
@@ -165,7 +163,7 @@ impl EngineIoSocket {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::IllegalActionBeforeOpen();
             #[cfg(feature = "callback")]
-            self.callback(Event::Error, format!("{}", error))?;
+            self.callback(PacketId::Error, format!("{}", error))?;
             return Err(error);
         }
 
@@ -191,19 +189,17 @@ impl EngineIoSocket {
             }
 
             for packet in packets.unwrap().as_vec() {
-                #[cfg(feature = "callback")]
-                self.callback(Event::Packet, packet.clone())?;
 
                 // check for the appropriate action or callback
                 match packet.packet_id {
                     PacketId::Message => {
                         #[cfg(feature = "callback")]
-                        self.callback(Event::Data, packet.clone())?;
+                        self.callback(PacketId::Message, packet.clone())?;
                     }
 
                     PacketId::Close => {
                         #[cfg(feature = "callback")]
-                        self.callback(Event::Close, packet.clone())?;
+                        self.callback(PacketId::Close, packet.clone())?;
                         // set current state to not connected and stop polling
                         self.connected.store(false, Ordering::Release);
                     }
@@ -225,6 +221,10 @@ impl EngineIoSocket {
                     PacketId::Noop => (),
                     PacketId::Base64 => {
                         // Has no id, not possible to decode.
+                        unreachable!();
+                    }
+                    PacketId::Error => {
+                        // Has no id, not possible to decode
                         unreachable!();
                     }
                 }
@@ -279,16 +279,16 @@ impl EngineIoSocket {
     }
 
     #[cfg(feature = "callback")]
-    pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()>
+    pub(crate) fn on<T>(&mut self, packet_id: PacketId, callback: T) -> Result<()>
     where
         T: Fn(Bytes) + 'static + Sync + Send,
     {
         // For some reason it doesn't resolve types correctly in a generic trait.
         let mut hash = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
-        if !hash.contains_key(&event) {
-            hash.insert(event.clone(), vec![]);
+        if !hash.contains_key(&packet_id) {
+            hash.insert(packet_id.clone(), vec![]);
         }
-        let vec = hash.get_mut(&event);
+        let vec = hash.get_mut(&packet_id);
         vec.unwrap().push(Box::new(callback));
         Ok(())
     }
@@ -339,7 +339,7 @@ impl EngineIoSocket {
             drop(connection_data);
 
             #[cfg(feature = "callback")]
-            self.callback(Event::Open, "")?;
+            self.callback(PacketId::Open, "")?;
 
             // set the last ping to now and set the connected state
             *self.last_ping.lock()? = Instant::now();
@@ -351,7 +351,7 @@ impl EngineIoSocket {
         } else {
             let error = Error::InvalidHandshake("Empty response".to_owned());
             #[cfg(feature = "callback")]
-            self.callback(Event::Error, format!("{}", error))?;
+            self.callback(PacketId::Error, format!("{}", error))?;
             Err(error)
         }
     }
@@ -367,18 +367,18 @@ impl EngineIoSocket {
 }
 
 #[cfg(feature = "callback")]
-impl EventEmitter<PacketId, Event, Callback> for EngineIoSocket {
-    fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T) -> Result<()> {
-        self.emit(Packet::new(event, bytes.into()), false)
+impl EventEmitter<PacketId, PacketId, Callback> for EngineIoSocket {
+    fn emit<T: Into<Bytes>>(&self, packet_id: PacketId, bytes: T) -> Result<()> {
+        self.emit(Packet::new(packet_id, bytes.into()), false)
     }
 
-    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
-        self.on(event, callback)
+    fn on(&mut self, packet_id: PacketId, callback: Callback) -> Result<()> {
+        self.on(packet_id, callback)
     }
 
-    fn off(&mut self, event: Event) -> Result<()> {
+    fn off(&mut self, packet_id: PacketId) -> Result<()> {
         let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
-        map.insert(event, Vec::new()).unwrap();
+        map.insert(packet_id, Vec::new()).unwrap();
         Ok(())
     }
 }
@@ -481,7 +481,7 @@ mod test {
         #[cfg(feature = "callback")]
         socket
             .on(
-                Event::Data,
+                PacketId::Message,
                 Box::new(|data: Bytes| {
                     println!(
                         "Received: {:?}",
@@ -584,20 +584,14 @@ mod test {
         #[cfg(feature = "callback")]
         {
             assert!(socket
-                .on(Event::Open, |_| {
-                    println!("Open event!");
+                .on(PacketId::Open, |_| {
+                    println!("Open PacketId!");
                 })
                 .is_ok());
 
             assert!(socket
-                .on(Event::Packet, |packet| {
+                .on(PacketId::Message, |packet| {
                     println!("Received packet: {:?}", packet);
-                })
-                .is_ok());
-
-            assert!(socket
-                .on(Event::Data, |data| {
-                    println!("Received packet: {:?}", std::str::from_utf8(&data));
                 })
                 .is_ok());
         }

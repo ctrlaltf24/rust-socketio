@@ -7,7 +7,7 @@ use std::convert::TryFrom;
 
 use crate::error::{Error, Result};
 /// Enumeration of the `engine.io` `Packet` types.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub enum PacketId {
     Open = 0,
     Close = 1,
@@ -17,6 +17,7 @@ pub enum PacketId {
     Upgrade = 5,
     Noop = 6,
     Base64,
+    Error,
 }
 
 impl From<PacketId> for String {
