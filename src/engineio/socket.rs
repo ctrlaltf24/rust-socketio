@@ -1,4 +1,6 @@
-use super::event::Event;
+
+    #[cfg(feature = "callback")]
+    use super::event::Event;
 #[cfg(feature = "client")]
 use super::transports::{
     websocket::WebsocketTransport, websocket_secure::WebsocketSecureTransport,
@@ -15,6 +17,7 @@ use ::websocket::header::Headers;
 use bytes::Bytes;
 use native_tls::TlsConnector;
 use reqwest::header::HeaderMap;
+#[cfg(feature = "callback")]
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::atomic::Ordering;
@@ -27,6 +30,7 @@ use std::{
 };
 use url::Url;
 
+#[cfg(feature = "callback")]
 /// Type of a `Callback` function. (Normal closures can be passed in here).
 type Callback = Box<dyn Fn(Bytes) + 'static + Sync + Send>;
 
@@ -40,6 +44,7 @@ pub struct EngineIoSocket {
     last_pong: Arc<Mutex<Instant>>,
     base_url: Arc<RwLock<Url>>,
     connection_data: Arc<RwLock<Option<HandshakePacket>>>,
+    #[cfg(feature = "callback")]
     callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
     opening_headers: Arc<RwLock<Option<HeaderMap>>>,
     tls_config: Arc<RwLock<Option<TlsConnector>>>,
@@ -70,6 +75,7 @@ impl EngineIoSocket {
             last_ping: Arc::new(Mutex::new(Instant::now())),
             last_pong: Arc::new(Mutex::new(Instant::now())),
             connection_data: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "callback")]
             callbacks: Arc::new(RwLock::new(HashMap::new())),
             opening_headers: Arc::new(RwLock::new(opening_headers)),
             tls_config: Arc::new(RwLock::new(tls_config)),
@@ -82,6 +88,7 @@ impl EngineIoSocket {
     pub fn emit(&self, packet: Packet, is_binary_att: bool) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::IllegalActionAfterOpen();
+            #[cfg(feature = "callback")]
             self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
@@ -95,6 +102,7 @@ impl EngineIoSocket {
         };
 
         if let Err(error) = self.transport.read()?.emit(data, is_binary_att) {
+            #[cfg(feature = "callback")]
             self.callback(Event::Error, error.to_string())?;
             return Err(error);
         }
@@ -109,6 +117,7 @@ impl EngineIoSocket {
 
     /// Calls the error callback with a given message.
     #[inline]
+    #[cfg(feature = "callback")]
     fn callback<T: Into<Bytes>>(&self, event: Event, payload: T) -> Result<()> {
         let callbacks = self.callbacks.read()?;
         let functions = callbacks.get(&event);
@@ -157,6 +166,7 @@ impl EngineIoSocket {
     pub(crate) fn poll_cycle(&self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::IllegalActionBeforeOpen();
+            #[cfg(feature = "callback")]
             self.callback(Event::Error, format!("{}", error))?;
             return Err(error);
         }
@@ -183,15 +193,18 @@ impl EngineIoSocket {
             }
 
             for packet in packets.unwrap().as_vec() {
+                #[cfg(feature = "callback")]
                 self.callback(Event::Packet, packet.clone())?;
 
                 // check for the appropriate action or callback
                 match packet.packet_id {
                     PacketId::Message => {
+                        #[cfg(feature = "callback")]
                         self.callback(Event::Data, packet.clone())?;
                     }
 
                     PacketId::Close => {
+                        #[cfg(feature = "callback")]
                         self.callback(Event::Close, packet.clone())?;
                         // set current state to not connected and stop polling
                         self.connected.store(false, Ordering::Release);
@@ -267,6 +280,7 @@ impl EngineIoSocket {
         Ok(())
     }
 
+    #[cfg(feature = "callback")]
     pub(crate) fn on<T>(&mut self, event: Event, callback: T) -> Result<()>
     where
         T: Fn(Bytes) + 'static + Sync + Send,
@@ -282,6 +296,7 @@ impl EngineIoSocket {
     }
 }
 
+#[cfg(feature = "callback")]
 impl EventEmitter<PacketId, Event, Callback> for EngineIoSocket {
     fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T) -> Result<()> {
         self.emit(Packet::new(event, bytes.into()), false)
@@ -346,6 +361,7 @@ impl Client for EngineIoSocket {
             *connection_data = Some(conn_data);
             drop(connection_data);
 
+            #[cfg(feature = "callback")]
             self.callback(Event::Open, "")?;
 
             // set the last ping to now and set the connected state
@@ -357,6 +373,7 @@ impl Client for EngineIoSocket {
             Ok(())
         } else {
             let error = Error::InvalidHandshake("Empty response".to_owned());
+            #[cfg(feature = "callback")]
             self.callback(Event::Error, format!("{}", error))?;
             Err(error)
         }
@@ -466,6 +483,7 @@ mod test {
             )
             .is_ok());
 
+            #[cfg(feature = "callback")]
         socket
             .on(
                 Event::Data,
@@ -568,6 +586,8 @@ mod test {
 
         let mut socket = EngineIoSocket::new(url, None, None, None);
 
+        #[cfg(feature = "callback")]
+        {
         assert!(socket
             .on(Event::Open, |_| {
                 println!("Open event!");
@@ -585,7 +605,7 @@ mod test {
                 println!("Received packet: {:?}", std::str::from_utf8(&data));
             })
             .is_ok());
-
+        }
         assert!(socket.connect().is_ok());
 
         assert!(socket

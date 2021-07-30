@@ -179,6 +179,8 @@ pub(crate) mod test {
 
         assert!(socket.emit("binary", Bytes::from_static(&[46, 88])).is_ok());
 
+        #[cfg(feature = "callback")]
+        {
         let ack_cb = |payload, _| {
             println!("Yehaa the ack got acked");
             println!("With data: {:#?}", payload);
@@ -187,7 +189,7 @@ pub(crate) mod test {
         assert!(socket
             .emit_with_ack("binary", json!("pls ack"), Duration::from_secs(1), ack_cb,)
             .is_ok());
-
+        }
         sleep(Duration::from_secs(20));
     }
 }

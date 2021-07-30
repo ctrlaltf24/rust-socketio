@@ -30,3 +30,4 @@ url = "2.2.2"
 [features]
 default = [ "client" ]
 client = []
+callback = []

@@ -31,14 +31,15 @@ use crate::event::EventEmitter;
 
 use super::{event::Event, payload::Payload};
 
+#[cfg(feature = "callback")]
 /// The type of a callback function.
 pub(crate) type Callback = Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>;
 
-pub(crate) type EventCallback = (Event, RwLock<Callback>);
 /// Represents an `Ack` as given back to the caller. Holds the internal `id` as
 /// well as the current ack'ed state. Holds data which will be accessible as
 /// soon as the ack'ed state is set to true. An `Ack` that didn't get ack'ed
 /// won't contain data.
+#[cfg(feature = "callback")]
 pub struct Ack {
     pub id: i32,
     timeout: Duration,
@@ -51,13 +52,14 @@ pub struct Ack {
 pub struct SocketIoSocket {
     engine_socket: Arc<RwLock<EngineIoSocket>>,
     connected: Arc<AtomicBool>,
-    on: Arc<Vec<EventCallback>>,
+    #[cfg(feature = "callback")]
     outstanding_acks: Arc<RwLock<Vec<Ack>>>,
     // used to detect unfinished binary events as, as the attachments
     // gets send in a separate packet
     unfinished_packet: Arc<RwLock<Option<SocketPacket>>>,
     // namespace, for multiplexing messages
     pub(crate) nsp: Arc<Option<String>>,
+    #[cfg(feature = "callback")]
     callbacks: Arc<RwLock<HashMap<Event, Vec<Callback>>>>,
 }
 
@@ -77,10 +79,11 @@ impl SocketIoSocket {
                 opening_headers,
             ))),
             connected: Arc::new(AtomicBool::default()),
-            on: Arc::new(Vec::new()),
+            #[cfg(feature = "callback")]
             outstanding_acks: Arc::new(RwLock::new(Vec::new())),
             unfinished_packet: Arc::new(RwLock::new(None)),
             nsp: Arc::new(nsp),
+            #[cfg(feature = "callback")]
             callbacks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -235,6 +238,7 @@ impl SocketIoSocket {
     ///
     /// sleep(Duration::from_secs(2));
     /// ```
+    #[cfg(feature = "callback")]
     pub fn emit_with_ack<F, E: Into<Event>, P: Into<Payload>>(
         &mut self,
         event: E,
@@ -298,6 +302,7 @@ impl SocketIoSocket {
                 }
                 SocketPacketId::ConnectError => {
                     clone_self.connected.store(false, Ordering::Release);
+                    #[cfg(feature = "callback")]
                     if let Some(function) = clone_self.get_event_callback(&Event::Error) {
                         spawn_scoped!({
                             let mut lock = function.1.write().unwrap();
@@ -321,6 +326,7 @@ impl SocketIoSocket {
                     SocketIoSocket::handle_event(socket_packet, clone_self);
                 }
                 SocketPacketId::Ack => {
+                    #[cfg(feature = "callback")]
                     Self::handle_ack(socket_packet, clone_self);
                 }
                 SocketPacketId::BinaryEvent => {
@@ -334,6 +340,7 @@ impl SocketIoSocket {
                 }
                 SocketPacketId::BinaryAck => {
                     if is_finalized_packet {
+                        #[cfg(feature = "callback")]
                         Self::handle_ack(socket_packet, clone_self);
                     } else {
                         *clone_self.unfinished_packet.write().unwrap() = Some(socket_packet);
@@ -345,6 +352,7 @@ impl SocketIoSocket {
 
     /// Handles the incoming acks and classifies what callbacks to call and how.
     #[inline]
+    #[cfg(feature = "callback")]
     fn handle_ack(socket_packet: SocketPacket, clone_self: &SocketIoSocket) {
         let mut to_be_removed = Vec::new();
         if let Some(id) = socket_packet.id {
@@ -385,6 +393,7 @@ impl SocketIoSocket {
 
     /// Sets up the callback routes on the engine.io socket, called before
     /// opening the connection.
+    #[cfg(feature = "callback")]
     fn setup_callbacks(&mut self) -> Result<()> {
         let clone_self: SocketIoSocket = self.clone();
         let error_callback = move |msg| {
@@ -449,6 +458,7 @@ impl SocketIoSocket {
         };
 
         if let Some(binary_payload) = socket_packet.binary_data {
+            #[cfg(feature = "callback")]
             if let Some(function) = clone_self.get_event_callback(&event) {
                 spawn_scoped!({
                     let mut lock = function.1.write().unwrap();
@@ -481,6 +491,7 @@ impl SocketIoSocket {
                 } else {
                     Event::Message
                 };
+                #[cfg(feature = "callback")]
                 // check which callback to use and call it with the data if it's present
                 if let Some(function) = clone_self.get_event_callback(&event) {
                     spawn_scoped!({
@@ -505,6 +516,7 @@ impl SocketIoSocket {
     }
 
     /// A convenient method for finding a callback for a certain event.
+    #[cfg(feature = "callback")]
     #[inline]
     fn get_event_callback(&self, event: &Event) -> Option<&(Event, RwLock<Callback>)> {
         self.on.iter().find(|item| item.0 == *event)
@@ -515,6 +527,7 @@ impl SocketIoSocket {
     }
 }
 
+#[cfg(feature = "callback")]
 impl EventEmitter<Event, Event, Callback> for SocketIoSocket {
     fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T) -> Result<()> {
         self.emit(event, Payload::Binary(bytes.into()))
@@ -542,6 +555,7 @@ impl Client for SocketIoSocket {
     /// Connects to the server. This includes a connection of the underlying
     /// engine.io client and afterwards an opening socket.io request.
     fn connect(&mut self) -> Result<()> {
+        #[cfg(feature = "callback")]
         self.setup_callbacks()?;
 
         if self.connected.load(Ordering::Acquire) {
@@ -641,6 +655,7 @@ impl Client for SocketIoSocket {
     }
 }
 
+#[cfg(feature = "callback")]
 impl Debug for Ack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
@@ -652,10 +667,9 @@ impl Debug for Ack {
 
 impl Debug for SocketIoSocket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("SocketIoSocket(engine_socket: {:?}, connected: {:?}, on: <defined callbacks>, outstanding_acks: {:?}, nsp: {:?})",
+        f.write_fmt(format_args!("SocketIoSocket(engine_socket: {:?}, connected: {:?}, on: <defined callbacks>, nsp: {:?})",
             self.engine_socket,
             self.connected,
-            self.outstanding_acks,
             self.nsp,
         ))
     }
@@ -676,6 +690,9 @@ mod test {
         let url = crate::socketio::test::socket_io_server()?;
 
         let mut socket = SocketIoSocket::new(url, None, None, None);
+
+        #[cfg(feature = "callback")]
+        {
 
         assert!(socket
             .on(
@@ -712,6 +729,7 @@ mod test {
                 ack_callback
             )
             .is_ok());
+        }
         Ok(())
     }
 
@@ -743,6 +761,8 @@ mod test {
 
         let mut socket = Socket::new(url, None, None, None);
 
+        #[cfg(feature = "callback")]
+        {
         let result = socket.on(
             "test".into(),
             Box::new(|msg, _| match msg {
@@ -751,6 +771,7 @@ mod test {
             }),
         );
         assert!(result.is_ok());
+    }
 
         let result = socket.connect();
         assert!(result.is_ok());
@@ -760,6 +781,8 @@ mod test {
 
         assert!(result.is_ok());
 
+        #[cfg(feature = "callback")]
+        {
         let ack_callback = move |message: Payload, socket_: Socket| {
             let result = socket_.emit(
                 "test",
@@ -781,7 +804,7 @@ mod test {
             ack_callback,
         );
         assert!(ack.is_ok());
-
+    }
         socket.disconnect().unwrap();
         // assert!(socket.disconnect().is_ok());
 

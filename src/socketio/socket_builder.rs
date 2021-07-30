@@ -196,6 +196,7 @@ impl SocketBuilder {
             self.tls_config,
             self.opening_headers,
         );
+        #[cfg(feature = "callback")]
         if let Some(callbacks) = self.on {
             for (event, callback) in callbacks {
                 socket.on(event, Box::new(callback)).unwrap();
