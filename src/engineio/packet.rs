@@ -187,6 +187,13 @@ impl TryFrom<Packet> for HandshakePacket {
     }
 }
 
+impl TryFrom<Bytes> for HandshakePacket {
+    type Error = Error;
+    fn try_from(bytes: Bytes) -> Result<Self> {
+        HandshakePacket::try_from(Packet::try_from(bytes)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
