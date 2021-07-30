@@ -27,9 +27,9 @@ pub enum Error {
     #[error("An error occurred while encoding/decoding base64: {0}")]
     InvalidBase64(#[from] DecodeError),
     #[error("Invalid Url: {0}")]
-    InvalidUrlScheme(String),
+    InvalidUrl(String),
     #[error("Invalid Url during parsing")]
-    InvalidUrl(#[from] UrlParseError),
+    InvalidUrlDuringParsing(#[from] UrlParseError),
     #[error("Error during connection via http: {0}")]
     IncompleteReqwest(#[from] ReqwestError),
     #[error("Network request returned with status code: {0}")]

@@ -240,6 +240,45 @@ impl EngineIoSocket {
         Ok(())
     }
 
+    /// This handles the upgrade from polling to websocket transport. Looking at the protocol
+    /// specs, this needs the following preconditions:
+    /// - the handshake must have already happened
+    /// - the handshake `upgrade` field needs to contain the value `websocket`.
+    /// If those preconditions are valid, it is save to call the method. The protocol then
+    /// requires the following procedure:
+    /// - the client starts to connect to the server via websocket, mentioning the related `sid` received
+    ///   in the handshake.
+    /// - to test out the connection, the client sends a `ping` packet with the payload `probe`.
+    /// - if the server receives this correctly, it responses by sending a `pong` packet with the payload `probe`.
+    /// - if the client receives that both sides can be sure that the upgrade is save and the client requests
+    ///   the final upgrade by sending another `update` packet over `websocket`.
+    /// If this procedure is alright, the new transport is established.
+    #[cfg(feature = "client")]
+    fn upgrade_connection(&mut self) -> Result<()> {
+        let tls_config = self.tls_config.read()?.clone();
+
+        let full_address = self.base_url.read()?.clone();
+        let base_url = Url::parse(&full_address.to_string()[..])?;
+        drop(full_address);
+
+        match base_url.scheme() {
+            "https" => {
+                *self.transport.write()? = Box::new(WebsocketSecureTransport::new(
+                    base_url,
+                    tls_config,
+                    self.get_ws_headers()?,
+                ));
+            }
+            "http" => {
+                *self.transport.write()? =
+                    Box::new(WebsocketTransport::new(base_url, self.get_ws_headers()?));
+            }
+            _ => return Err(Error::InvalidUrl(base_url.to_string())),
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "callback")]
     pub(crate) fn on<T>(&mut self, packet_id: PacketId, callback: T) -> Result<()>
     where
@@ -254,54 +293,6 @@ impl EngineIoSocket {
         vec.unwrap().push(Box::new(callback));
         Ok(())
     }
-
-    pub fn connect_and_upgrade(url: Url, tls_config: Option<TlsConnector>, opening_headers: Option<HeaderMap>) -> Result<EngineIoSocket> {
-        type TransportType = PollingTransport;
-        let transport: DynamicTransport = Box::new(PollingTransport::new(
-            url.clone(),
-            tls_config.clone(),
-            opening_headers.clone(),
-        ));
-        let handshake: HandshakePacket = transport.poll()?.try_into()?;
-
-        // update the base_url with the new sid
-        let url = url
-            .query_pairs_mut()
-            .append_pair("sid", &handshake.sid[..])
-            .finish()
-            .clone();
-
-        // check if we could upgrade to websockets
-        let websocket_upgrade = handshake
-            .upgrades
-            .iter()
-            .any(|upgrade| upgrade.to_lowercase() == *"websocket");
-
-        if websocket_upgrade {
-            let result = {
-                match url.scheme() {
-                    "https" => {
-                        type TransportType = WebsocketSecureTransport;
-                        transport = Box::new(WebsocketSecureTransport::new(
-                            url,
-                            tls_config,
-                            self.get_ws_headers()?,
-                        ));
-                    }
-                    "http" => {
-                        type TransportType = WebsocketTransport;
-                        transport =
-                            Box::new(WebsocketTransport::new(url, self.get_ws_headers()?));
-                    }
-                    _ => return Err(Error::InvalidUrlScheme(url.scheme().to_string())),
-                }
-                Ok(())
-            };
-        }
-
-        Ok(EngineIoSocket::new())
-    }
-
     /// Opens the connection to a specified server. Includes an opening `GET`
     /// request to the server, the server passes back the handshake data in the
     /// response. If the handshake data mentions a websocket upgrade possibility,
@@ -309,21 +300,62 @@ impl EngineIoSocket {
     /// to the server to trigger the Ping-cycle.
     #[cfg(feature = "client")]
     pub fn connect(&mut self) -> Result<()> {
-        if self.connection_data.read()?.is_none() {
-            *self.connection_data.write()? = Some(self.transport.read()?.poll()?.try_into()?);
+        let packets = self.poll()?;
+
+        if packets.is_some() {
+            let conn_data: HandshakePacket = packets
+                .unwrap()
+                .as_vec()
+                .get(0)
+                .unwrap()
+                .clone()
+                .try_into()?;
+            self.connected.store(true, Ordering::Release);
+
+            // check if we could upgrade to websockets
+            let websocket_upgrade = conn_data
+                .upgrades
+                .iter()
+                .any(|upgrade| upgrade.to_lowercase() == *"websocket");
+
+            // update the base_url with the new sid
+            let mut base_url = self.base_url.write()?;
+            let new_base_url = base_url
+                .query_pairs_mut()
+                .append_pair("sid", &conn_data.sid[..])
+                .finish()
+                .clone();
+            *base_url = new_base_url;
+            drop(base_url);
+
+            // if we have an upgrade option, send the corresponding request, if this doesn't work
+            // for some reason, proceed via polling
+            if websocket_upgrade {
+                // TODO: No warnings if upgrade connection fails.
+                let _ = self.upgrade_connection();
+            }
+
+            // set the connection data
+            let mut connection_data = self.connection_data.write()?;
+            *connection_data = Some(conn_data);
+            drop(connection_data);
+
+            #[cfg(feature = "callback")]
+            self.callback(PacketId::Open, "")?;
+
+            // set the last ping to now and set the connected state
+            *self.last_ping.lock()? = Instant::now();
+
+            // emit a pong packet to keep trigger the ping cycle on the server
+            self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
+
+            Ok(())
+        } else {
+            let error = Error::InvalidHandshake("Empty response".to_owned());
+            #[cfg(feature = "callback")]
+            self.callback(PacketId::Error, format!("{}", error))?;
+            Err(error)
         }
-        self.connected.store(true, Ordering::Release);
-
-        #[cfg(feature = "callback")]
-        self.callback(PacketId::Open, "")?;
-
-        // set the last ping to now and set the connected state
-        *self.last_ping.lock()? = Instant::now();
-
-        // emit a pong packet to keep trigger the ping cycle on the server
-        self.emit(Packet::new(PacketId::Pong, Bytes::new()), false)?;
-
-        Ok(())
     }
 
     /// Disconnects this client from the server by sending a `engine.io` closing
