@@ -28,6 +28,6 @@ native-tls = "0.2.7"
 url = "2.2.2"
 
 [features]
-default = [ "client" ]
+default = [ "client", "callback" ]
 client = []
 callback = []

@@ -35,6 +35,8 @@ use super::{event::Event, payload::Payload};
 /// The type of a callback function.
 pub(crate) type Callback = Box<dyn FnMut(Payload, Socket) + 'static + Sync + Send>;
 
+#[cfg(feature = "callback")]
+pub(crate) type EventCallback = (Event, RwLock<Callback>);
 /// Represents an `Ack` as given back to the caller. Holds the internal `id` as
 /// well as the current ack'ed state. Holds data which will be accessible as
 /// soon as the ack'ed state is set to true. An `Ack` that didn't get ack'ed
@@ -52,6 +54,8 @@ pub struct Ack {
 pub struct SocketIoSocket {
     engine_socket: Arc<RwLock<EngineIoSocket>>,
     connected: Arc<AtomicBool>,
+    #[cfg(feature = "callback")]
+    on: Arc<Vec<EventCallback>>,
     #[cfg(feature = "callback")]
     outstanding_acks: Arc<RwLock<Vec<Ack>>>,
     // used to detect unfinished binary events as, as the attachments
@@ -79,6 +83,8 @@ impl SocketIoSocket {
                 opening_headers,
             ))),
             connected: Arc::new(AtomicBool::default()),
+            #[cfg(feature = "callback")]
+            on: Arc::new(Vec::new()),
             #[cfg(feature = "callback")]
             outstanding_acks: Arc::new(RwLock::new(Vec::new())),
             unfinished_packet: Arc::new(RwLock::new(None)),
