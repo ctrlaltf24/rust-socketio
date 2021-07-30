@@ -1,12 +1,10 @@
 
-    #[cfg(feature = "callback")]
-    use super::event::Event;
+#[cfg(feature = "callback")]
+use super::event::Event;
 #[cfg(feature = "client")]
 use super::transports::{
     websocket::WebsocketTransport, websocket_secure::WebsocketSecureTransport,
 };
-#[cfg(feature = "client")]
-use crate::client::Client;
 use crate::engineio::packet::Payload;
 use crate::engineio::packet::{HandshakePacket, Packet, PacketId};
 use crate::engineio::transport::Transport;
@@ -294,34 +292,13 @@ impl EngineIoSocket {
         vec.unwrap().push(Box::new(callback));
         Ok(())
     }
-}
-
-#[cfg(feature = "callback")]
-impl EventEmitter<PacketId, Event, Callback> for EngineIoSocket {
-    fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T) -> Result<()> {
-        self.emit(Packet::new(event, bytes.into()), false)
-    }
-
-    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
-        self.on(event, callback)
-    }
-
-    fn off(&mut self, event: Event) -> Result<()> {
-        let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
-        map.insert(event, Vec::new()).unwrap();
-        Ok(())
-    }
-}
-
-#[cfg(feature = "client")]
-impl Client for EngineIoSocket {
     /// Opens the connection to a specified server. Includes an opening `GET`
     /// request to the server, the server passes back the handshake data in the
     /// response. If the handshake data mentions a websocket upgrade possibility,
     /// we try to upgrade the connection. Afterwards a first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
     #[cfg(feature = "client")]
-    fn connect(&mut self) -> Result<()> {
+    pub fn connect(&mut self) -> Result<()> {
         let packets = self.poll()?;
 
         if packets.is_some() {
@@ -381,10 +358,28 @@ impl Client for EngineIoSocket {
 
     /// Disconnects this client from the server by sending a `engine.io` closing
     /// packet.
-    fn disconnect(&mut self) -> Result<()> {
+    #[cfg(feature = "client")]
+    pub fn disconnect(&mut self) -> Result<()> {
         let packet = Packet::new(PacketId::Close, Bytes::from_static(&[]));
         self.connected.store(false, Ordering::Release);
         self.emit(packet, false)
+    }
+}
+
+#[cfg(feature = "callback")]
+impl EventEmitter<PacketId, Event, Callback> for EngineIoSocket {
+    fn emit<T: Into<Bytes>>(&self, event: PacketId, bytes: T) -> Result<()> {
+        self.emit(Packet::new(event, bytes.into()), false)
+    }
+
+    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
+        self.on(event, callback)
+    }
+
+    fn off(&mut self, event: Event) -> Result<()> {
+        let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
+        map.insert(event, Vec::new()).unwrap();
+        Ok(())
     }
 }
 
@@ -483,7 +478,7 @@ mod test {
             )
             .is_ok());
 
-            #[cfg(feature = "callback")]
+        #[cfg(feature = "callback")]
         socket
             .on(
                 Event::Data,
@@ -588,23 +583,23 @@ mod test {
 
         #[cfg(feature = "callback")]
         {
-        assert!(socket
-            .on(Event::Open, |_| {
-                println!("Open event!");
-            })
-            .is_ok());
+            assert!(socket
+                .on(Event::Open, |_| {
+                    println!("Open event!");
+                })
+                .is_ok());
 
-        assert!(socket
-            .on(Event::Packet, |packet| {
-                println!("Received packet: {:?}", packet);
-            })
-            .is_ok());
+            assert!(socket
+                .on(Event::Packet, |packet| {
+                    println!("Received packet: {:?}", packet);
+                })
+                .is_ok());
 
-        assert!(socket
-            .on(Event::Data, |data| {
-                println!("Received packet: {:?}", std::str::from_utf8(&data));
-            })
-            .is_ok());
+            assert!(socket
+                .on(Event::Data, |data| {
+                    println!("Received packet: {:?}", std::str::from_utf8(&data));
+                })
+                .is_ok());
         }
         assert!(socket.connect().is_ok());
 

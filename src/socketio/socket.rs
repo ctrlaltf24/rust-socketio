@@ -1,5 +1,4 @@
 #[cfg(feature = "client")]
-use crate::client::Client;
 use crate::error::{Error, Result};
 use crate::socketio::packet::{Packet as SocketPacket, PacketId as SocketPacketId};
 use crate::{
@@ -531,36 +530,10 @@ impl SocketIoSocket {
     fn is_engineio_connected(&self) -> Result<bool> {
         self.engine_socket.read()?.is_connected()
     }
-}
-
-#[cfg(feature = "callback")]
-impl EventEmitter<Event, Event, Callback> for SocketIoSocket {
-    fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T) -> Result<()> {
-        self.emit(event, Payload::Binary(bytes.into()))
-    }
-
-    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
-        let mut hash = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
-        if !hash.contains_key(&event) {
-            hash.insert(event.clone(), vec![]);
-        }
-        let vec = hash.get_mut(&event);
-        vec.unwrap().push(Box::new(callback));
-        Ok(())
-    }
-
-    fn off(&mut self, event: Event) -> Result<()> {
-        let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
-        map.insert(event, Vec::new()).unwrap();
-        Ok(())
-    }
-}
-
-#[cfg(feature = "client")]
-impl Client for SocketIoSocket {
     /// Connects to the server. This includes a connection of the underlying
     /// engine.io client and afterwards an opening socket.io request.
-    fn connect(&mut self) -> Result<()> {
+    #[cfg(feature = "client")]
+    pub fn connect(&mut self) -> Result<()> {
         #[cfg(feature = "callback")]
         self.setup_callbacks()?;
 
@@ -637,7 +610,8 @@ impl Client for SocketIoSocket {
     /// socket.disconnect();
     ///
     /// ```
-    fn disconnect(&mut self) -> Result<()> {
+    #[cfg(feature = "client")]
+    pub fn disconnect(&mut self) -> Result<()> {
         if !self.is_engineio_connected()? || !self.connected.load(Ordering::Acquire) {
             return Err(Error::IllegalActionAfterOpen());
         }
@@ -657,6 +631,29 @@ impl Client for SocketIoSocket {
 
         self.send(&disconnect_packet)?;
         self.connected.store(false, Ordering::Release);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "callback")]
+impl EventEmitter<Event, Event, Callback> for SocketIoSocket {
+    fn emit<T: Into<Bytes>>(&self, event: Event, bytes: T) -> Result<()> {
+        self.emit(event, Payload::Binary(bytes.into()))
+    }
+
+    fn on(&mut self, event: Event, callback: Callback) -> Result<()> {
+        let mut hash = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
+        if !hash.contains_key(&event) {
+            hash.insert(event.clone(), vec![]);
+        }
+        let vec = hash.get_mut(&event);
+        vec.unwrap().push(Box::new(callback));
+        Ok(())
+    }
+
+    fn off(&mut self, event: Event) -> Result<()> {
+        let mut map = Arc::get_mut(&mut self.callbacks).unwrap().write()?;
+        map.insert(event, Vec::new()).unwrap();
         Ok(())
     }
 }
@@ -699,42 +696,41 @@ mod test {
 
         #[cfg(feature = "callback")]
         {
+            assert!(socket
+                .on(
+                    "test".into(),
+                    Box::new(|message, _| {
+                        if let Payload::String(st) = message {
+                            println!("{}", st)
+                        }
+                    })
+                )
+                .is_ok());
 
-        assert!(socket
-            .on(
-                "test".into(),
-                Box::new(|message, _| {
-                    if let Payload::String(st) = message {
-                        println!("{}", st)
-                    }
-                })
-            )
-            .is_ok());
+            assert!(socket.on("Error".into(), Box::new(|_, _| {})).is_ok());
 
-        assert!(socket.on("Error".into(), Box::new(|_, _| {})).is_ok());
+            assert!(socket.on("Connect".into(), Box::new(|_, _| {})).is_ok());
 
-        assert!(socket.on("Connect".into(), Box::new(|_, _| {})).is_ok());
+            assert!(socket.on("Close".into(), Box::new(|_, _| {})).is_ok());
 
-        assert!(socket.on("Close".into(), Box::new(|_, _| {})).is_ok());
+            socket.connect().unwrap();
 
-        socket.connect().unwrap();
+            let ack_callback = |message: Payload, _| {
+                println!("Yehaa! My ack got acked?");
+                if let Payload::String(str) = message {
+                    println!("Received string ack");
+                    println!("Ack data: {}", str);
+                }
+            };
 
-        let ack_callback = |message: Payload, _| {
-            println!("Yehaa! My ack got acked?");
-            if let Payload::String(str) = message {
-                println!("Received string ack");
-                println!("Ack data: {}", str);
-            }
-        };
-
-        assert!(socket
-            .emit_with_ack(
-                "test",
-                Payload::String("123".to_owned()),
-                Duration::from_secs(10),
-                ack_callback
-            )
-            .is_ok());
+            assert!(socket
+                .emit_with_ack(
+                    "test",
+                    Payload::String("123".to_owned()),
+                    Duration::from_secs(10),
+                    ack_callback
+                )
+                .is_ok());
         }
         Ok(())
     }
@@ -769,15 +765,15 @@ mod test {
 
         #[cfg(feature = "callback")]
         {
-        let result = socket.on(
-            "test".into(),
-            Box::new(|msg, _| match msg {
-                Payload::String(str) => println!("Received string: {}", str),
-                Payload::Binary(bin) => println!("Received binary data: {:#?}", bin),
-            }),
-        );
-        assert!(result.is_ok());
-    }
+            let result = socket.on(
+                "test".into(),
+                Box::new(|msg, _| match msg {
+                    Payload::String(str) => println!("Received string: {}", str),
+                    Payload::Binary(bin) => println!("Received binary data: {:#?}", bin),
+                }),
+            );
+            assert!(result.is_ok());
+        }
 
         let result = socket.connect();
         assert!(result.is_ok());
@@ -789,28 +785,28 @@ mod test {
 
         #[cfg(feature = "callback")]
         {
-        let ack_callback = move |message: Payload, socket_: Socket| {
-            let result = socket_.emit(
+            let ack_callback = move |message: Payload, socket_: Socket| {
+                let result = socket_.emit(
+                    "test",
+                    Payload::String(json!({"got ack": true}).to_string()),
+                );
+                assert!(result.is_ok());
+
+                println!("Yehaa! My ack got acked?");
+                if let Payload::String(str) = message {
+                    println!("Received string Ack");
+                    println!("Ack data: {}", str);
+                }
+            };
+
+            let ack = socket.emit_with_ack(
                 "test",
-                Payload::String(json!({"got ack": true}).to_string()),
+                Payload::String(payload.to_string()),
+                Duration::from_secs(2),
+                ack_callback,
             );
-            assert!(result.is_ok());
-
-            println!("Yehaa! My ack got acked?");
-            if let Payload::String(str) = message {
-                println!("Received string Ack");
-                println!("Ack data: {}", str);
-            }
-        };
-
-        let ack = socket.emit_with_ack(
-            "test",
-            Payload::String(payload.to_string()),
-            Duration::from_secs(2),
-            ack_callback,
-        );
-        assert!(ack.is_ok());
-    }
+            assert!(ack.is_ok());
+        }
         socket.disconnect().unwrap();
         // assert!(socket.disconnect().is_ok());
 

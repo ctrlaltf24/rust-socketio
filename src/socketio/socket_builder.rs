@@ -1,6 +1,4 @@
 use super::{event::Event, payload::Payload, Socket};
-#[cfg(feature = "client")]
-use crate::client::Client;
 use crate::error::{Error, Result};
 #[cfg(feature = "client")]
 use crate::event::EventEmitter;
