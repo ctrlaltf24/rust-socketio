@@ -91,20 +91,20 @@ impl TryFrom<Bytes> for Packet {
         bytes: Bytes,
     ) -> std::result::Result<Self, <Self as std::convert::TryFrom<Bytes>>::Error> {
         if bytes.is_empty() {
-            return Err(Error::EmptyPacket);
+            return Err(Error::IncompletePacket());
         }
 
-        let is_base64 = *bytes.get(0).ok_or(Error::IncompletePacket)? == b'b';
+        let is_base64 = *bytes.get(0).ok_or(Error::IncompletePacket())? == b'b';
 
         // only 'messages' packets could be encoded
         let packet_id = if is_base64 {
             PacketId::Message
         } else {
-            (*bytes.get(0).ok_or(Error::IncompletePacket)? as u8).try_into()?
+            (*bytes.get(0).ok_or(Error::IncompletePacket())? as u8).try_into()?
         };
 
         if bytes.len() == 1 && packet_id == PacketId::Message {
-            return Err(Error::IncompletePacket);
+            return Err(Error::IncompletePacket());
         }
 
         let data: Bytes = bytes.slice(1..);

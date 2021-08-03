@@ -129,7 +129,7 @@ impl EngineSocket {
     /// to configure callbacks afterwards.
     pub fn bind<T: Into<String>>(&mut self, address: T) -> Result<()> {
         if self.connected.load(Ordering::Acquire) {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
         self.open(address.into())?;
 
@@ -143,7 +143,8 @@ impl EngineSocket {
             loop {
                 match s.poll_cycle() {
                     Ok(_) => break,
-                    e @ Err(Error::HttpError(_)) | e @ Err(Error::ReqwestError(_)) => {
+                    e @ Err(Error::IncompleteHttp(_))
+                    | e @ Err(Error::IncompleteResponseFromReqwest(_)) => {
                         panic!("{}", e.unwrap_err())
                     }
                     _ => (),
@@ -154,13 +155,13 @@ impl EngineSocket {
         Ok(())
     }
 
-    /// Registers an `on_open` callback.
+    /// Registers the `on_open` callback.
     pub fn on_open<F>(&mut self, function: F) -> Result<()>
     where
         F: Fn(()) + 'static + Sync + Send,
     {
         if self.is_connected()? {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
         let mut on_open = self.on_open.write()?;
         *on_open = Some(Box::new(function));
@@ -174,7 +175,7 @@ impl EngineSocket {
         F: Fn(String) + 'static + Sync + Send,
     {
         if self.is_connected()? {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
         let mut on_error = self.on_error.write()?;
         *on_error = Some(Box::new(function));
@@ -188,7 +189,7 @@ impl EngineSocket {
         F: Fn(Packet) + 'static + Sync + Send,
     {
         if self.is_connected()? {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
         let mut on_packet = self.on_packet.write()?;
         *on_packet = Some(Box::new(function));
@@ -202,7 +203,7 @@ impl EngineSocket {
         F: Fn(Bytes) + 'static + Sync + Send,
     {
         if self.is_connected()? {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
         let mut on_data = self.on_data.write()?;
         *on_data = Some(Box::new(function));
@@ -216,7 +217,7 @@ impl EngineSocket {
         F: Fn(()) + 'static + Sync + Send,
     {
         if self.is_connected()? {
-            return Err(Error::IllegalActionAfterOpen);
+            return Err(Error::IllegalActionAfterOpen());
         }
         let mut on_close = self.on_close.write()?;
         *on_close = Some(Box::new(function));
@@ -287,7 +288,7 @@ impl EngineSocket {
                         return Ok(());
                     }
 
-                    let error = Error::HandshakeError(response);
+                    let error = Error::InvalidHandshake(response);
                     self.call_error_callback(format!("{}", error))?;
                     return Err(error);
                 }
@@ -347,7 +348,7 @@ impl EngineSocket {
 
             return Ok(());
         }
-        Err(Error::HandshakeError("Error - invalid url".to_owned()))
+        Err(Error::InvalidHandshake("Error - invalid url".to_owned()))
     }
 
     /// Converts between `reqwest::HeaderMap` and `websocket::Headers`, if they're currently set, if not
@@ -384,7 +385,7 @@ impl EngineSocket {
         // expect to receive a probe packet
         let message = client.recv_message()?;
         if message.take_payload() != b"3probe" {
-            return Err(Error::HandshakeError("Error".to_owned()));
+            return Err(Error::InvalidHandshake("Error".to_owned()));
         }
 
         // finally send the upgrade request. the payload `5` stands for an upgrade
@@ -418,7 +419,7 @@ impl EngineSocket {
         // expect to receive a probe packet
         let message = receiver.recv_message()?;
         if message.take_payload() != b"3probe" {
-            return Err(Error::HandshakeError("Error".to_owned()));
+            return Err(Error::InvalidHandshake("Error".to_owned()));
         }
 
         // finally send the upgrade request. the payload `5` stands for an upgrade
@@ -438,7 +439,7 @@ impl EngineSocket {
     /// socketio binary attachment via the boolean attribute `is_binary_att`.
     pub fn emit(&self, packet: Packet, is_binary_att: bool) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
-            let error = Error::ActionBeforeOpen;
+            let error = Error::IllegalActionBeforeOpen();
             self.call_error_callback(format!("{}", error))?;
             return Err(error);
         }
@@ -483,7 +484,7 @@ impl EngineSocket {
                 drop(client);
 
                 if status != 200 {
-                    let error = Error::HttpError(status);
+                    let error = Error::IncompleteHttp(status);
                     self.call_error_callback(format!("{}", error))?;
                     return Err(error);
                 }
@@ -523,7 +524,7 @@ impl EngineSocket {
     /// response handling from the server.
     pub fn poll_cycle(&mut self) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
-            let error = Error::ActionBeforeOpen;
+            let error = Error::IllegalActionBeforeOpen();
             self.call_error_callback(format!("{}", error))?;
             return Err(error);
         }
@@ -974,7 +975,7 @@ mod test {
         let _error = sut
             .emit(Packet::new(PacketId::Close, Bytes::from_static(b"")), false)
             .expect_err("error");
-        assert!(matches!(Error::ActionBeforeOpen, _error));
+        assert!(matches!(Error::IllegalActionBeforeOpen(), _error));
 
         // test missing match arm in socket constructor
         let mut headers = HeaderMap::new();
