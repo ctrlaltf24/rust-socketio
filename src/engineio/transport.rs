@@ -2,7 +2,8 @@ use super::transports::{PollingTransport, WebsocketSecureTransport, WebsocketTra
 use crate::engineio::packet::{Packet, Payload};
 use crate::error::Result;
 use adler32::adler32;
-use bytes::Bytes;
+use bytes::{Bytes};
+use std::convert::TryFrom;
 use std::time::SystemTime;
 use url::Url;
 
@@ -74,4 +75,9 @@ impl std::fmt::Debug for dyn Transport {
     }
 }
 
-//TODO: add iter() implementation
+impl Iterator for dyn Transport {
+    type Item = Payload;
+    fn next(&mut self) -> std::option::Option<<Self as std::iter::Iterator>::Item> {
+        Some(Payload::try_from(self.poll().unwrap()).unwrap())
+    }
+}
