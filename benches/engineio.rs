@@ -7,12 +7,7 @@ use rust_socketio::engineio::{
 use rust_socketio::error::Error;
 
 fn engine_io_emit(socket: &TransportClient, packet: Packet) -> Result<(), Error> {
-    let mut i = 0;
-    while i < 100 {
-        i += 1;
-        socket.emit(packet.clone(), false)?;
-    }
-    Ok(())
+    socket.emit(packet.clone(), false)
 }
 
 fn engine_io_url() -> Result<String, Error> {
