@@ -55,6 +55,12 @@ pub mod tests {
         SocketBuilder::new(url).build_polling()
     }
 
+    pub fn engine_io_socket_build_polling_secure(url: Url) -> Result<Socket, Error> {
+        SocketBuilder::new(url)
+            .set_tls_config(tls_connector()?)
+            .build_polling()
+    }
+
     pub fn engine_io_socket_build_websocket(url: Url) -> Result<Socket, Error> {
         SocketBuilder::new(url).build_websocket()
     }
@@ -98,6 +104,17 @@ mod criterion_wrappers {
         });
     }
 
+    pub fn criterion_engine_io_socket_build_polling_secure(c: &mut Criterion) {
+        let url = engine_io_url_secure().unwrap();
+        c.bench_function("engine io build polling secure", |b| {
+            b.iter(|| {
+                engine_io_socket_build_polling_secure(black_box(url.clone()))
+                    .unwrap()
+                    .close()
+            })
+        });
+    }
+
     pub fn criterion_engine_io_socket_build_websocket(c: &mut Criterion) {
         let url = engine_io_url().unwrap();
         c.bench_function("engine io build websocket", |b| {
@@ -126,7 +143,7 @@ mod criterion_wrappers {
 
     pub fn criterion_engine_io_emit_polling(c: &mut Criterion) {
         let url = engine_io_url().unwrap();
-        let mut socket = engine_io_socket_build(url).unwrap();
+        let mut socket = engine_io_socket_build_polling(url).unwrap();
         socket.connect().unwrap();
         let packet = engine_io_packet();
 
@@ -136,9 +153,21 @@ mod criterion_wrappers {
         socket.close().unwrap();
     }
 
+    pub fn criterion_engine_io_emit_polling_secure(c: &mut Criterion) {
+        let url = engine_io_url_secure().unwrap();
+        let mut socket = engine_io_socket_build_polling_secure(url).unwrap();
+        socket.connect().unwrap();
+        let packet = engine_io_packet();
+
+        c.bench_function("engine io polling secure emit", |b| {
+            b.iter(|| engine_io_emit(black_box(&socket), black_box(packet.clone())).unwrap())
+        });
+        socket.close().unwrap();
+    }
+
     pub fn criterion_engine_io_emit_websocket(c: &mut Criterion) {
         let url = engine_io_url().unwrap();
-        let mut socket = engine_io_socket_build(url).unwrap();
+        let mut socket = engine_io_socket_build_websocket(url).unwrap();
         socket.connect().unwrap();
         let packet = engine_io_packet();
 
@@ -150,7 +179,7 @@ mod criterion_wrappers {
 
     pub fn criterion_engine_io_emit_websocket_secure(c: &mut Criterion) {
         let url = engine_io_url_secure().unwrap();
-        let mut socket = engine_io_socket_build(url).unwrap();
+        let mut socket = engine_io_socket_build_websocket_secure(url).unwrap();
         socket.connect().unwrap();
         let packet = engine_io_packet();
 
@@ -164,11 +193,13 @@ mod criterion_wrappers {
 criterion_group!(
     benches,
     criterion_engine_io_socket_build_polling,
+    criterion_engine_io_socket_build_polling_secure,
     criterion_engine_io_socket_build_websocket,
     criterion_engine_io_socket_build_websocket_secure,
     criterion_engine_io_socket_build,
     criterion_engine_io_packet,
     criterion_engine_io_emit_polling,
+    criterion_engine_io_emit_polling_secure,
     criterion_engine_io_emit_websocket,
     criterion_engine_io_emit_websocket_secure
 );
